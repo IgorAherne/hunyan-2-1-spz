@@ -1,3 +1,5 @@
+# hy3dshape\configs\hunyuandit-mini-overfitting-flowmatching-dinol518-bf16-lr1e4-4096.yaml
+
 name: "HunyuanDiT flowmatching; VAE: 4096 token length; ImageEncoder: DINO-v2 Large; ImageSize: 518"
 # Overfitting successfully cost 68G memory under current settings
 # You can adjust model arch or batch_size according to your GPU memory

@@ -1,3 +1,5 @@
+# hy3dpaint\convert_utils.py
+
 import trimesh
 import pygltflib
 import numpy as np

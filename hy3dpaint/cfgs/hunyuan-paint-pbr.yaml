@@ -1,3 +1,5 @@
+# hy3dpaint\cfb\hunyuan-paint-pbr.yaml
+
 model:
   base_learning_rate: 5.0e-05
   target: hunyuanpaintpbr.model.HunyuanPaint

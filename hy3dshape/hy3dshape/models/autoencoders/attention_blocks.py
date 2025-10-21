@@ -1,3 +1,5 @@
+# hy3dshape\hy3dshape\models\autoencoders\attention_blocks.py
+
 # Open Source Model Licensed under the Apache License Version 2.0
 # and Other Licenses of the Third-Party Components therein:
 # The below Model in this distribution may have been modified by THL A29 Limited

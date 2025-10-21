@@ -1,3 +1,5 @@
+# hy3dshape\configs\hunyuandit-finetuning-flowmatching-dinol518-bf16-lr1e5-4096.yaml
+
 name: "HunyuanDiT flowmatching; VAE: 4096 token length; ImageEncoder: DINO-v2 Large; ImageSize: 518"
 # training successfully on 8 x H20 with 98G Memory
 
