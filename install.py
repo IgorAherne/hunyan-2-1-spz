@@ -182,7 +182,7 @@ def install_dependencies():
         # List of packages to install with pip
         # Based on the Hunyuan 2.1 requirements (Torch 2.5.1 with CUDA 12.4)
         packages = [
-            (f"pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124", "Installing PyTorch 2.5.1 with CUDA 12.4"),
+            (f"pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128", "Installing PyTorch 2.7.1 with CUDA 12.8"),
             ("pip install -r requirements.txt", "Installing dependencies from requirements.txt"),
             # Ensuring key packages needed for Gradio/API are installed/updated
             (f"pip install huggingface_hub accelerate gradio", "Installing HuggingFace Hub, Accelerate, and Gradio"),
@@ -192,8 +192,8 @@ def install_dependencies():
         # Assuming wheels will be placed in 'code/whl' and compiled for Python 3.11 (cp311)
         wheel_files = {
             # Replace these placeholders with the actual names of your compiled wheels
-            "custom_rasterizer": "whl/custom_rasterizer-0.1.0-cp311-cp311-win_amd64.whl",
-            "differentiable_renderer": "whl/differentiable_renderer-0.1.0-cp311-cp311-win_amd64.whl",
+            "custom_rasterizer": "whl/custom_rasterizer-0.1-cp311-cp311-win_amd64.whl",
+            "differentiable_renderer": "whl/differentiable_renderer_mesh_painter-0.1-cp311-cp311-win_amd64.whl",
             # Add other wheels as needed
         }
 
