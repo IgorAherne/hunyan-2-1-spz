@@ -15,9 +15,26 @@
 from setuptools import setup, find_packages
 import torch
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CppExtension
+from packaging.version import Version
+
+# Defines the base CUDA architectures to build for.
+nvcc_args = [
+    '-gencode=arch=compute_61,code=sm_61',      # Pascal (GTX 10xx)
+    '-gencode=arch=compute_75,code=sm_75',      # Turing (RTX 20xx)
+    '-gencode=arch=compute_86,code=sm_86',      # Ampere (RTX 30xx)
+    '-gencode=arch=compute_89,code=sm_89',      # Ada Lovelace (RTX 40xx)
+    '-gencode=arch=compute_89,code=compute_89'  # PTX for forward-compatibility
+]
+
+# Conditionally add Blackwell support if CUDA version is 12.8 or greater.
+# This is based on findings from open-source projects handling early support.
+if torch.version.cuda and Version(torch.version.cuda) >= Version("12.8"):
+    nvcc_args.extend([
+        '-gencode=arch=compute_120,code=sm_120',    # Native binary for Blackwell
+        '-gencode=arch=compute_120,code=compute_120' # PTX for future GPUs
+    ])
 
 # build custom rasterizer
-
 custom_rasterizer_module = CUDAExtension(
     "custom_rasterizer_kernel",
     [
@@ -25,6 +42,7 @@ custom_rasterizer_module = CUDAExtension(
         "lib/custom_rasterizer_kernel/grid_neighbor.cpp",
         "lib/custom_rasterizer_kernel/rasterizer_gpu.cu",
     ],
+    extra_compile_args={'nvcc': nvcc_args}
 )
 
 setup(
