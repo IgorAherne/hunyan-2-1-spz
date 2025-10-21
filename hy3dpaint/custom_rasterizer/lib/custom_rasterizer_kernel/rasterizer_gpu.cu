@@ -18,7 +18,7 @@ __device__ void rasterizeTriangleGPU(int idx, float* vt0, float* vt1, float* vt2
             if (isBarycentricCoordInBounds(baryCentricCoordinate)) {
                 int pixel = py * width + px;
                 if (zbuffer == 0) {
-                    atomicExch(&zbuffer[pixel], (INT64)(idx + 1));
+                    atomicExch(&zbuffer[pixel], (uint64_t)(idx + 1));
                     continue;
                 }
                 float depth = baryCentricCoordinate[0] * vt0[2] + baryCentricCoordinate[1] * vt1[2] + baryCentricCoordinate[2] * vt2[2];
@@ -107,21 +107,21 @@ std::vector<torch::Tensor> rasterize_image_gpu(torch::Tensor V, torch::Tensor F,
     auto options = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA, device_id).requires_grad(false);
     auto INT64_options = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA, device_id).requires_grad(false);
     auto findices = torch::zeros({height, width}, options);
-    INT64 maxint = (INT64)MAXINT * (INT64)MAXINT + (MAXINT - 1);
-    auto z_min = torch::ones({height, width}, INT64_options) * (long)maxint;
+    uint64_t maxint = (uint64_t)MAXINT * (uint64_t)MAXINT + (MAXINT - 1);
+    auto z_min = torch::ones({height, width}, INT64_options) * (uint64_t)maxint;
 
     if (!use_depth_prior) {
         rasterizeImagecoordsKernelGPU<<<(num_faces+255)/256,256,0,at::cuda::getCurrentCUDAStream()>>>(V.data_ptr<float>(), F.data_ptr<int>(), 0,
-            (INT64*)z_min.data_ptr<long>(), occlusion_truncation, width, height, num_vertices, num_faces); 
+            (uint64_t*)z_min.data_ptr<int64_t>(), occlusion_truncation, width, height, num_vertices, num_faces); 
     } else {
         rasterizeImagecoordsKernelGPU<<<(num_faces+255)/256,256,0,at::cuda::getCurrentCUDAStream()>>>(V.data_ptr<float>(), F.data_ptr<int>(), D.data_ptr<float>(),
-            (INT64*)z_min.data_ptr<long>(), occlusion_truncation, width, height, num_vertices, num_faces); 
+            (uint64_t*)z_min.data_ptr<int64_t>(), occlusion_truncation, width, height, num_vertices, num_faces); 
     }
 
     auto float_options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, device_id).requires_grad(false);
     auto barycentric = torch::zeros({height, width, 3}, float_options);
     barycentricFromImgcoordGPU<<<(width * height + 255)/256, 256>>>(V.data_ptr<float>(), F.data_ptr<int>(),
-        findices.data_ptr<int>(), (INT64*)z_min.data_ptr<long>(), width, height, num_vertices, num_faces, barycentric.data_ptr<float>());
+        findices.data_ptr<int>(), (uint64_t*)z_min.data_ptr<int64_t>(), width, height, num_vertices, num_faces, barycentric.data_ptr<float>());
 
     return {findices, barycentric};
 }

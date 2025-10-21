@@ -1,10 +1,11 @@
 #include "rasterizer.h"
+#include <cmath>
 
 __device__ void rasterizeTriangleGPU(int idx, float* vt0, float* vt1, float* vt2, int width, int height, uint64_t* zbuffer, float* d, float occlusion_truncation) {
-    float x_min = std::min(vt0[0], std::min(vt1[0],vt2[0]));
-    float x_max = std::max(vt0[0], std::max(vt1[0],vt2[0]));
-    float y_min = std::min(vt0[1], std::min(vt1[1],vt2[1]));
-    float y_max = std::max(vt0[1], std::max(vt1[1],vt2[1]));
+    float x_min = fminf(vt0[0], fminf(vt1[0],vt2[0]));
+    float x_max = fmaxf(vt0[0], fmaxf(vt1[0],vt2[0]));
+    float y_min = fminf(vt0[1], fminf(vt1[1],vt2[1]));
+    float y_max = fmaxf(vt0[1], fmaxf(vt1[1],vt2[1]));
 
     for (int px = x_min; px < x_max + 1; ++px) {
         if (px < 0 || px >= width)
@@ -111,10 +112,10 @@ std::vector<torch::Tensor> rasterize_image_gpu(torch::Tensor V, torch::Tensor F,
     auto z_min = torch::ones({height, width}, INT64_options) * (uint64_t)maxint;
 
     if (!use_depth_prior) {
-        rasterizeImagecoordsKernelGPU<<<(num_faces+255)/256,256,0,at::cuda::getCurrentCUDAStream()>>>(V.data_ptr<float>(), F.data_ptr<int>(), 0,
+        rasterizeImagecoordsKernelGPU<<<(num_faces+255)/256,256,0,at::cuda::getCurrentCUDAStream().stream()>>>(V.data_ptr<float>(), F.data_ptr<int>(), 0,
             (uint64_t*)z_min.data_ptr<uint64_t>(), occlusion_truncation, width, height, num_vertices, num_faces); 
     } else {
-        rasterizeImagecoordsKernelGPU<<<(num_faces+255)/256,256,0,at::cuda::getCurrentCUDAStream()>>>(V.data_ptr<float>(), F.data_ptr<int>(), D.data_ptr<float>(),
+        rasterizeImagecoordsKernelGPU<<<(num_faces+255)/256,256,0,at::cuda::getCurrentCUDAStream().stream()>>>(V.data_ptr<float>(), F.data_ptr<int>(), D.data_ptr<float>(),
             (uint64_t*)z_min.data_ptr<uint64_t>(), occlusion_truncation, width, height, num_vertices, num_faces); 
     }
 
