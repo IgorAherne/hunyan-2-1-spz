@@ -52,6 +52,10 @@ from hy3dshape.utils import logger
 from hy3dpaint.convert_utils import create_glb_with_pbr_materials
 
 
+# Set to True to skip shape generation and use a placeholder mesh for testing texturing.
+# You must provide a mesh at `assets/debug_mesh.obj` for this to work.
+DEBUG_SKIP_SHAPE_GENERATION = True #MODIF
+
 MAX_SEED = 1e7
 ENV = "Local" # "Huggingface"
 if ENV == 'Huggingface':
@@ -335,6 +339,7 @@ def _gen_shape(
     main_image = image if not MV_MODE else image['front']
     return mesh, main_image, save_folder, stats, seed
 
+
 @spaces.GPU(duration=60)
 def generation_all(
     caption=None,
@@ -352,11 +357,25 @@ def generation_all(
     randomize_seed: bool = False,
 ):
     start_time_0 = time.time()
-    
-    # Low VRAM mode: load, run, and free pipelines sequentially
-    if args.low_vram_mode:
-        print("Running in Low VRAM mode (sequential pipeline execution).")
+
+    # --- Part 1: Get the initial mesh ---
+    if DEBUG_SKIP_SHAPE_GENERATION:
+        print("\n--- DEBUG MODE: Skipping Shape Generation ---\n")
+        if image is None:
+            raise gr.Error("An image prompt is required to test texturing directly in debug mode.")
+
+        debug_mesh_path = "assets/debug_mesh.obj"
+        if not os.path.exists(debug_mesh_path):
+            raise gr.Error(f"Debug mesh not found at '{debug_mesh_path}'. Please provide a mesh to test texturing.")
         
+        mesh = trimesh.load(debug_mesh_path, force="mesh")
+        save_folder = gen_save_folder()
+        stats = {'mode': 'texture_only_debug', 'debug_mesh': debug_mesh_path, 'time': {}}
+        # Use the seed from the UI if available
+        seed = int(randomize_seed_fn(seed, randomize_seed))
+    
+    elif args.low_vram_mode:
+        print("Running in Low VRAM mode (sequential pipeline execution).")
         # 1. Shape Generation
         print("Loading shape generation pipeline...")
         shape_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
@@ -375,15 +394,24 @@ def generation_all(
         del shape_pipeline
         clear_gpu_memory()
 
-        path = export_mesh(mesh, save_folder, textured=False)
-        
-        # Mesh post-processing
-        tmp_time = time.time()
-        mesh = face_reduce_worker(mesh)
-        path = export_mesh(mesh, save_folder, textured=False, type='obj')
-        stats['time']['face reduction'] = time.time() - tmp_time
-        
-        # 2. Texture Generation
+    else: # Standard VRAM mode: use pre-loaded global pipelines
+        mesh, image, save_folder, stats, seed = _gen_shape(
+            i23d_worker, caption, image, mv_image_front, mv_image_back, mv_image_left, mv_image_right,
+            steps, guidance_scale, seed, octree_resolution, check_box_rembg, num_chunks, randomize_seed
+        )
+
+    # --- Part 2: Common Mesh Post-Processing ---
+    path = export_mesh(mesh, save_folder, textured=False, type='obj')
+    print(f"Exported untextured mesh to {path}")
+
+    tmp_time = time.time()
+    mesh = face_reduce_worker(mesh)
+    path = export_mesh(mesh, save_folder, textured=False, type='obj') # Overwrite with reduced mesh path
+    stats['time']['face reduction'] = time.time() - tmp_time
+
+    # --- Part 3: Texture Generation (respecting low_vram_mode) ---
+    if args.low_vram_mode:
+        # Load, run, and unload texture pipeline
         print("Loading texture generation pipeline...")
         conf = Hunyuan3DPaintConfig(max_num_view=8, resolution=768)
         conf.realesrgan_ckpt_path = "hy3dpaint/ckpt/RealESRGAN_x4plus.pth"
@@ -400,30 +428,18 @@ def generation_all(
         texture_pipeline.free_memory()
         del texture_pipeline
         clear_gpu_memory()
-
-    # Standard VRAM mode: use pre-loaded global pipelines
     else:
-        mesh, image, save_folder, stats, seed = _gen_shape(
-            i23d_worker, caption, image, mv_image_front, mv_image_back, mv_image_left, mv_image_right,
-            steps, guidance_scale, seed, octree_resolution, check_box_rembg, num_chunks, randomize_seed
-        )
-        path = export_mesh(mesh, save_folder, textured=False)
-
-        tmp_time = time.time()
-        mesh = face_reduce_worker(mesh)
-        path = export_mesh(mesh, save_folder, textured=False, type='obj')
-        stats['time']['face reduction'] = time.time() - tmp_time
-
+        # Use pre-loaded global pipeline
         tmp_time = time.time()
         text_path = os.path.join(save_folder, f'textured_mesh.obj')
         path_textured = tex_pipeline(mesh_path=path, image_path=image, output_mesh_path=text_path, save_glb=False)
         stats['time']['texture generation'] = time.time() - tmp_time
 
-    # --- Common final steps ---
+    # --- Part 4: Common final steps ---
     tmp_time = time.time()
     glb_path_textured = os.path.join(save_folder, 'textured_mesh.glb')
     quick_convert_with_obj2gltf(path_textured, glb_path_textured)
-    stats['time']['convert textured OBJ to GLB'] = time.time() - tmp_time
+    stats['time']['convert textured OBJ to GLB'] = time.time() - tmp_time 
     stats['time']['total'] = time.time() - start_time_0
     
     model_viewer_html_textured = build_model_viewer_html(save_folder, height=HTML_HEIGHT, width=HTML_WIDTH, textured=True)
@@ -435,6 +451,7 @@ def generation_all(
         stats,
         seed,
     )
+
 
 @spaces.GPU(duration=60)
 def shape_generation(

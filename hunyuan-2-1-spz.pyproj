@@ -5,15 +5,19 @@
     <ProjectGuid>9ae2fb79-9b50-420f-83c3-abf7251e0960</ProjectGuid>
     <ProjectHome>.</ProjectHome>
     <StartupFile>gradio_app.py</StartupFile>
-    <SearchPath>
-    </SearchPath>
-    <WorkingDirectory>.</WorkingDirectory>
+    <SearchPath>..\code</SearchPath>
+    <WorkingDirectory>C:\_myDrive\repos\hunyan-2-1-spz\code</WorkingDirectory>
     <OutputPath>.</OutputPath>
     <Name>hunyuan-2-1-spz</Name>
     <RootNamespace>hunyuan-2-1-spz</RootNamespace>
-    <InterpreterId>Global|VisualStudio|venv</InterpreterId>
+    <InterpreterId>MSBuild|venv|$(MSBuildProjectFullPath)</InterpreterId>
     <SuppressEnvironmentCreationPrompt>True</SuppressEnvironmentCreationPrompt>
     <SuppressConfigureTestFrameworkPrompt>true</SuppressConfigureTestFrameworkPrompt>
+    <IsWindowsApplication>False</IsWindowsApplication>
+    <LaunchProvider>Standard Python launcher</LaunchProvider>
+    <CommandLineArguments>--low_vram_mode</CommandLineArguments>
+    <EnableNativeCodeDebugging>False</EnableNativeCodeDebugging>
+    <InterpreterPath>C:\_myDrive\repos\hunyan-2-1-spz\code\venv\Scripts\python.exe</InterpreterPath>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
     <DebugSymbols>true</DebugSymbols>
@@ -667,7 +671,15 @@
     <Compile Include="torchvision_fix.py" />
   </ItemGroup>
   <ItemGroup>
-    <InterpreterReference Include="Global|VisualStudio|venv" />
+    <Interpreter Include="venv\">
+      <Id>venv</Id>
+      <Version>3.11</Version>
+      <Description>venv (Python 3.11 (64-bit))</Description>
+      <InterpreterPath>Scripts\python.exe</InterpreterPath>
+      <WindowsInterpreterPath>Scripts\pythonw.exe</WindowsInterpreterPath>
+      <PathEnvironmentVariable>PYTHONPATH</PathEnvironmentVariable>
+      <Architecture>X64</Architecture>
+    </Interpreter>
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in
