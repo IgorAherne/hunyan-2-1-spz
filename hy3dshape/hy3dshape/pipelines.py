@@ -18,6 +18,7 @@ import copy
 import importlib
 import inspect
 import os
+import gc 
 from typing import List, Optional, Union
 
 import numpy as np
@@ -246,6 +247,22 @@ class Hunyuan3DDiTPipeline:
         self.image_processor = image_processor
         self.kwargs = kwargs
         self.to(device, dtype)
+        # Ensure self.device and self.dtype are set correctly
+        self.device = torch.device(device)
+        self.dtype = dtype
+
+    def free_memory(self):
+        """Frees up memory by deleting models and clearing cache."""
+        if hasattr(self, 'vae'):
+            del self.vae
+        if hasattr(self, 'model'):
+            del self.model
+        if hasattr(self, 'conditioner'):
+            del self.conditioner
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        logger.info("Hunyuan3DDiTPipeline memory freed.")
 
     def compile(self):
         self.vae = torch.compile(self.vae)
@@ -305,6 +322,19 @@ class Hunyuan3DDiTPipeline:
             self.vae.to(device)
             self.model.to(device)
             self.conditioner.to(device)
+
+    @property
+    def components(self):
+        r"""
+        Returns the components (models, schedulers, etc.) of the pipeline.
+        """
+        return {
+            "vae": self.vae,
+            "model": self.model,
+            "scheduler": self.scheduler,
+            "conditioner": self.conditioner,
+            "image_processor": self.image_processor,
+        }
 
     @property
     def _execution_device(self):
@@ -424,6 +454,8 @@ class Hunyuan3DDiTPipeline:
     @synchronize_timer('Encode cond')
     def encode_cond(self, image, additional_cond_inputs, do_classifier_free_guidance, dual_guidance):
         bsz = image.shape[0]
+        # Ensure image is in the correct dtype
+        image = image.to(self.dtype)
         cond = self.conditioner(image=image, **additional_cond_inputs)
 
         if do_classifier_free_guidance:
@@ -518,6 +550,7 @@ class Hunyuan3DDiTPipeline:
         return cond_input
 
     def get_guidance_scale_embedding(self, w, embedding_dim=512, dtype=torch.float32):
+        # Ensure calculations are done in float32 for stability, then cast back.
         """
         See https://github.com/google-research/vdm/blob/dc27b98a554f65cdc654b800da5aa1846545d41b/model_vdm.py#L298
 
@@ -537,13 +570,14 @@ class Hunyuan3DDiTPipeline:
 
         half_dim = embedding_dim // 2
         emb = torch.log(torch.tensor(10000.0)) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, dtype=dtype) * -emb)
-        emb = w.to(dtype)[:, None] * emb[None, :]
+        # Use float32 for calculations
+        emb = torch.exp(torch.arange(half_dim, dtype=torch.float32) * -emb)
+        emb = w.to(torch.float32)[:, None] * emb[None, :]
         emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
         if embedding_dim % 2 == 1:  # zero pad
             emb = torch.nn.functional.pad(emb, (0, 1))
         assert emb.shape == (w.shape[0], embedding_dim)
-        return emb
+        return emb.to(dtype) # Cast back to requested dtype
 
     def set_surface_extractor(self, mc_algo):
         if mc_algo is None:
@@ -616,6 +650,7 @@ class Hunyuan3DDiTPipeline:
             guidance_cond = self.get_guidance_scale_embedding(
                 guidance_scale_tensor, embedding_dim=self.model.guidance_cond_proj_dim
             ).to(device=device, dtype=latents.dtype)
+        
         with synchronize_timer('Diffusion Sampling'):
             for i, t in enumerate(tqdm(timesteps, disable=not enable_pbar, desc="Diffusion Sampling:", leave=False)):
                 # expand the latents if we are doing classifier free guidance
@@ -628,6 +663,10 @@ class Hunyuan3DDiTPipeline:
                 # predict the noise residual
                 timestep_tensor = torch.tensor([t], dtype=t_dtype, device=device)
                 timestep_tensor = timestep_tensor.expand(latent_model_input.shape[0])
+
+                # Ensure input to model is in the correct dtype
+                latent_model_input = latent_model_input.to(self.dtype)
+
                 noise_pred = self.model(latent_model_input, timestep_tensor, cond, guidance_cond=guidance_cond)
 
                 # no drop, drop clip, all drop
@@ -650,6 +689,9 @@ class Hunyuan3DDiTPipeline:
                 if callback is not None and i % callback_steps == 0:
                     step_idx = i // getattr(self.scheduler, "order", 1)
                     callback(step_idx, t, outputs)
+
+        # Ensure model hooks are freed if CPU offloading is used
+        self.maybe_free_model_hooks()
 
         return self._export(
             latents,
@@ -763,6 +805,10 @@ class Hunyuan3DDiTFlowMatchingPipeline(Hunyuan3DDiTPipeline):
                 # NOTE: we assume model get timesteps ranged from 0 to 1
                 timestep = t.expand(latent_model_input.shape[0]).to(latents.dtype)
                 timestep = timestep / self.scheduler.config.num_train_timesteps
+                
+                # Ensure input to model is in the correct dtype
+                latent_model_input = latent_model_input.to(self.dtype)
+
                 noise_pred = self.model(latent_model_input, timestep, cond, guidance=guidance)
 
                 if do_classifier_free_guidance:
@@ -776,6 +822,9 @@ class Hunyuan3DDiTFlowMatchingPipeline(Hunyuan3DDiTPipeline):
                 if callback is not None and i % callback_steps == 0:
                     step_idx = i // getattr(self.scheduler, "order", 1)
                     callback(step_idx, t, outputs)
+
+        # Ensure model hooks are freed if CPU offloading is used
+        self.maybe_free_model_hooks()
 
         return self._export(
             latents,
