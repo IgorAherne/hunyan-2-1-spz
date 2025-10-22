@@ -29,13 +29,28 @@ from ...utils import logger
 
 
 def extract_near_surface_volume_fn(input_tensor: torch.Tensor, alpha: float):
-    device = input_tensor.device
-    D = input_tensor.shape[0]
-    signed_val = 0.0
-
+    # Optimized implementation using max_pool3d for faster near-surface extraction
+    
     # 添加偏移并处理无效值
     val = input_tensor + alpha
     valid_mask = val > -9000  # 假设-9000是无效值
+
+    # 计算符号一致性（转换为float32确保精度）
+    sign = torch.sign(val.to(torch.float32))
+
+    # Use max_pool3d to check for sign changes in the neighborhood
+    sign_padded = sign.unsqueeze(0).unsqueeze(0) # Add batch and channel dimensions
+    
+    # Max pool with kernel size 3, stride 1, padding 1
+    max_sign = F.max_pool3d(sign_padded, kernel_size=3, stride=1, padding=1)
+    min_sign = -F.max_pool3d(-sign_padded, kernel_size=3, stride=1, padding=1)
+
+    # If max_sign != min_sign, there is a sign change, indicating near surface
+    near_surface_mask = (max_sign != min_sign).squeeze(0).squeeze(0)
+
+    # 生成最终掩码
+    mask = near_surface_mask.to(torch.int32)
+    return mask * valid_mask.to(torch.int32)
 
     # 改进的邻居获取函数（保持维度一致）
     def get_neighbor(t, shift, axis):
@@ -147,7 +162,7 @@ class VanillaVolumeDecoder:
         latents: torch.FloatTensor,
         geo_decoder: Callable,
         bounds: Union[Tuple[float], List[float], float] = 1.01,
-        num_chunks: int = 10000,
+        num_chunks: int = 20000, # Increased from 10000 to 20000
         octree_resolution: int = None,
         enable_pbar: bool = True,
         **kwargs,
@@ -191,7 +206,7 @@ class HierarchicalVolumeDecoding:
         latents: torch.FloatTensor,
         geo_decoder: Callable,
         bounds: Union[Tuple[float], List[float], float] = 1.01,
-        num_chunks: int = 10000,
+        num_chunks: int = 20000, # Increased from 10000 to 20000
         mc_level: float = 0.0,
         octree_resolution: int = None,
         min_resolution: int = 63,
@@ -223,8 +238,23 @@ class HierarchicalVolumeDecoding:
             indexing="ij"
         )
 
-        dilate = nn.Conv3d(1, 1, 3, padding=1, bias=False, device=device, dtype=dtype)
-        dilate.weight = torch.nn.Parameter(torch.ones(dilate.weight.shape, dtype=dtype, device=device))
+        # Use max_pool3d for dilation instead of Conv3d
+        # dilate = nn.Conv3d(1, 1, 3, padding=1, bias=False, device=device, dtype=dtype)
+        # dilate.weight = torch.nn.Parameter(torch.ones(dilate.weight.shape, dtype=dtype, device=device))
+        def dilate_fn(x):
+             # Use float32 for max_pool3d if input is bfloat16/float16
+            input_dtype = x.dtype
+            if input_dtype in [torch.bfloat16, torch.float16]:
+                x = x.to(torch.float32)
+            
+            # Ensure 5D input for max_pool3d
+            if x.dim() == 3:
+                x = x.unsqueeze(0).unsqueeze(0)
+            elif x.dim() == 4:
+                 x = x.unsqueeze(0)
+
+            dilated = F.max_pool3d(x, kernel_size=3, stride=1, padding=1)
+            return (dilated > 0).to(dtype)
 
         grid_size = np.array(grid_size)
         xyz_samples = torch.from_numpy(xyz_samples).to(device, dtype=dtype).contiguous().reshape(-1, 3)
@@ -247,28 +277,37 @@ class HierarchicalVolumeDecoding:
             next_index = torch.zeros(tuple(grid_size), dtype=dtype, device=device)
             next_logits = torch.full(next_index.shape, -10000., dtype=dtype, device=device)
             curr_points = extract_near_surface_volume_fn(grid_logits.squeeze(0), mc_level)
+            curr_points = (curr_points > 0).to(dtype)
             curr_points += grid_logits.squeeze(0).abs() < 0.95
 
             if octree_depth_now == resolutions[-1]:
                 expand_num = 0
             else:
                 expand_num = 1
+            
             for i in range(expand_num):
-                curr_points = dilate(curr_points.unsqueeze(0).to(dtype)).squeeze(0)
+                # Use optimized dilation
+                curr_points = dilate_fn(curr_points).squeeze()
+
             (cidx_x, cidx_y, cidx_z) = torch.where(curr_points > 0)
             next_index[cidx_x * 2, cidx_y * 2, cidx_z * 2] = 1
             for i in range(2 - expand_num):
-                next_index = dilate(next_index.unsqueeze(0)).squeeze(0)
+                # Use optimized dilation
+                next_index = dilate_fn(next_index).squeeze()
+            
             nidx = torch.where(next_index > 0)
 
             next_points = torch.stack(nidx, dim=1)
-            next_points = (next_points * torch.tensor(resolution, dtype=next_points.dtype, device=device) +
-                           torch.tensor(bbox_min, dtype=next_points.dtype, device=device))
+            # Ensure coordinate calculations are in float32
+            next_points = (next_points.to(torch.float32) * torch.tensor(resolution, dtype=torch.float32, device=device) +
+                           torch.tensor(bbox_min, dtype=torch.float32, device=device))
+            
             batch_logits = []
             for start in tqdm(range(0, next_points.shape[0], num_chunks),
                               desc=f"Hierarchical Volume Decoding [r{octree_depth_now + 1}]"):
                 queries = next_points[start: start + num_chunks, :]
                 batch_queries = repeat(queries, "p c -> b p c", b=batch_size)
+                # Ensure queries are in the latent dtype for the decoder
                 logits = geo_decoder(queries=batch_queries.to(latents.dtype), latents=latents)
                 batch_logits.append(logits)
             grid_logits = torch.cat(batch_logits, dim=1)
@@ -295,7 +334,7 @@ class FlashVDMVolumeDecoding:
         latents: torch.FloatTensor,
         geo_decoder: CrossAttentionDecoder,
         bounds: Union[Tuple[float], List[float], float] = 1.01,
-        num_chunks: int = 10000,
+        num_chunks: int = 20000, # Increased from 10000 to 20000
         mc_level: float = 0.0,
         octree_resolution: int = None,
         min_resolution: int = 63,
@@ -336,8 +375,21 @@ class FlashVDMVolumeDecoding:
             indexing="ij"
         )
 
-        dilate = nn.Conv3d(1, 1, 3, padding=1, bias=False, device=device, dtype=dtype)
-        dilate.weight = torch.nn.Parameter(torch.ones(dilate.weight.shape, dtype=dtype, device=device))
+        # Use max_pool3d for dilation instead of Conv3d
+        def dilate_fn(x):
+             # Use float32 for max_pool3d if input is bfloat16/float16
+            input_dtype = x.dtype
+            if input_dtype in [torch.bfloat16, torch.float16]:
+                x = x.to(torch.float32)
+            
+            # Ensure 5D input for max_pool3d
+            if x.dim() == 3:
+                x = x.unsqueeze(0).unsqueeze(0)
+            elif x.dim() == 4:
+                 x = x.unsqueeze(0)
+
+            dilated = F.max_pool3d(x, kernel_size=3, stride=1, padding=1)
+            return (dilated > 0).to(dtype)
 
         grid_size = np.array(grid_size)
 
@@ -378,19 +430,25 @@ class FlashVDMVolumeDecoding:
             next_index = torch.zeros(tuple(grid_size), dtype=dtype, device=device)
             next_logits = torch.full(next_index.shape, -10000., dtype=dtype, device=device)
             curr_points = extract_near_surface_volume_fn(grid_logits.squeeze(0), mc_level)
+            curr_points = (curr_points > 0).to(dtype)
             curr_points += grid_logits.squeeze(0).abs() < 0.95
 
             if octree_depth_now == resolutions[-1]:
                 expand_num = 0
             else:
                 expand_num = 1
+
             for i in range(expand_num):
-                curr_points = dilate(curr_points.unsqueeze(0).to(dtype)).squeeze(0)
+                # Use optimized dilation
+                curr_points = dilate_fn(curr_points).squeeze()
+
             (cidx_x, cidx_y, cidx_z) = torch.where(curr_points > 0)
 
             next_index[cidx_x * 2, cidx_y * 2, cidx_z * 2] = 1
             for i in range(2 - expand_num):
-                next_index = dilate(next_index.unsqueeze(0)).squeeze(0)
+                # Use optimized dilation
+                next_index = dilate_fn(next_index).squeeze()
+            
             nidx = torch.where(next_index > 0)
 
             next_points = torch.stack(nidx, dim=1)

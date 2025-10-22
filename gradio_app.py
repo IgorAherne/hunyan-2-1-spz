@@ -46,6 +46,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 import uuid
 import numpy as np
+import gc
 
 from hy3dshape.utils import logger
 from hy3dpaint.convert_utils import create_glb_with_pbr_materials
@@ -215,8 +216,15 @@ height="{height}" width="100%" frameborder="0"></iframe>'
         </div>
     """
 
+def clear_gpu_memory():
+    """Collects garbage and clears CUDA cache."""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
 @spaces.GPU(duration=60)
 def _gen_shape(
+    i23d_pipeline,
     caption=None,
     image=None,
     mv_image_front=None,
@@ -270,38 +278,41 @@ def _gen_shape(
     time_meta = {}
 
     if image is None:
+        worker_to_use = None
+        # In low VRAM mode, t2i_worker is not pre-loaded. Load it on-demand.
+        if args.low_vram_mode and args.enable_t23d:
+            from hy3dgen.text2image import HunyuanDiTPipeline
+            print("Low VRAM mode: Loading T2I pipeline on-demand...")
+            worker_to_use = HunyuanDiTPipeline('Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled')
+        elif HAS_T2I:
+            worker_to_use = t2i_worker
+        
         start_time = time.time()
-        try:
-            image = t2i_worker(caption)
-        except Exception as e:
-            raise gr.Error(f"Text to 3D is disable. \
-            Please enable it by `python gradio_app.py --enable_t23d`.")
+        if worker_to_use is not None:
+            try:
+                image = worker_to_use(caption)
+            except Exception as e:
+                raise gr.Error(f"Text-to-3D failed: {e}")
+        else:
+            raise gr.Error("Text-to-3D is disabled. Please enable it with `--enable_t23d`.")
+
+        # If we loaded a local T2I worker, free its memory now
+        if args.low_vram_mode and worker_to_use is not None:
+            del worker_to_use
+            clear_gpu_memory()
+            print("Unloaded T2I pipeline.")
+
         time_meta['text2image'] = time.time() - start_time
 
     # remove disk io to make responding faster, uncomment at your will.
     # image.save(os.path.join(save_folder, 'input.png'))
-    if MV_MODE:
-        start_time = time.time()
-        for k, v in image.items():
-            if check_box_rembg or v.mode == "RGB":
-                img = rmbg_worker(v.convert('RGB'))
-                image[k] = img
-        time_meta['remove background'] = time.time() - start_time
-    else:
-        if check_box_rembg or image.mode == "RGB":
-            start_time = time.time()
-            image = rmbg_worker(image.convert('RGB'))
-            time_meta['remove background'] = time.time() - start_time
-
-    # remove disk io to make responding faster, uncomment at your will.
-    # image.save(os.path.join(save_folder, 'rembg.png'))
 
     # image to white model
     start_time = time.time()
 
     generator = torch.Generator()
     generator = generator.manual_seed(int(seed))
-    outputs = i23d_worker(
+    outputs = i23d_pipeline(
         image=image,
         num_inference_steps=steps,
         guidance_scale=guidance_scale,
@@ -341,63 +352,82 @@ def generation_all(
     randomize_seed: bool = False,
 ):
     start_time_0 = time.time()
-    mesh, image, save_folder, stats, seed = _gen_shape(
-        caption,
-        image,
-        mv_image_front=mv_image_front,
-        mv_image_back=mv_image_back,
-        mv_image_left=mv_image_left,
-        mv_image_right=mv_image_right,
-        steps=steps,
-        guidance_scale=guidance_scale,
-        seed=seed,
-        octree_resolution=octree_resolution,
-        check_box_rembg=check_box_rembg,
-        num_chunks=num_chunks,
-        randomize_seed=randomize_seed,
-    )
-    path = export_mesh(mesh, save_folder, textured=False)
     
-
-    print(path)
-    print('='*40)
-
-    # tmp_time = time.time()
-    # mesh = floater_remove_worker(mesh)
-    # mesh = degenerate_face_remove_worker(mesh)
-    # logger.info("---Postprocessing takes %s seconds ---" % (time.time() - tmp_time))
-    # stats['time']['postprocessing'] = time.time() - tmp_time
-
-    tmp_time = time.time()
-    mesh = face_reduce_worker(mesh)
-
-    # path = export_mesh(mesh, save_folder, textured=False, type='glb')
-    path = export_mesh(mesh, save_folder, textured=False, type='obj') # 这样操作也会 core dump
-
-    logger.info("---Face Reduction takes %s seconds ---" % (time.time() - tmp_time))
-    stats['time']['face reduction'] = time.time() - tmp_time
-
-    tmp_time = time.time()
-
-    text_path = os.path.join(save_folder, f'textured_mesh.obj')
-    path_textured = tex_pipeline(mesh_path=path, image_path=image, output_mesh_path=text_path, save_glb=False)
+    # Low VRAM mode: load, run, and free pipelines sequentially
+    if args.low_vram_mode:
+        print("Running in Low VRAM mode (sequential pipeline execution).")
         
-    logger.info("---Texture Generation takes %s seconds ---" % (time.time() - tmp_time))
-    stats['time']['texture generation'] = time.time() - tmp_time
+        # 1. Shape Generation
+        print("Loading shape generation pipeline...")
+        shape_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
+            args.model_path, subfolder=args.subfolder, use_safetensors=False, device=args.device, dtype=DTYPE
+        )
+        if args.enable_flashvdm:
+            shape_pipeline.enable_flashvdm(mc_algo='mc' if args.device in ['cpu', 'mps'] else args.mc_algo)
+        
+        mesh, image, save_folder, stats, seed = _gen_shape(
+            shape_pipeline, caption, image, mv_image_front, mv_image_back, mv_image_left, mv_image_right,
+            steps, guidance_scale, seed, octree_resolution, check_box_rembg, num_chunks, randomize_seed
+        )
+        
+        print("Freeing shape generation pipeline memory...")
+        shape_pipeline.free_memory()
+        del shape_pipeline
+        clear_gpu_memory()
 
+        path = export_mesh(mesh, save_folder, textured=False)
+        
+        # Mesh post-processing
+        tmp_time = time.time()
+        mesh = face_reduce_worker(mesh)
+        path = export_mesh(mesh, save_folder, textured=False, type='obj')
+        stats['time']['face reduction'] = time.time() - tmp_time
+        
+        # 2. Texture Generation
+        print("Loading texture generation pipeline...")
+        conf = Hunyuan3DPaintConfig(max_num_view=8, resolution=768)
+        conf.realesrgan_ckpt_path = "hy3dpaint/ckpt/RealESRGAN_x4plus.pth"
+        conf.multiview_cfg_path = "hy3dpaint/cfgs/hunyuan-paint-pbr.yaml"
+        conf.custom_pipeline = "hy3dpaint/hunyuanpaintpbr"
+        texture_pipeline = Hunyuan3DPaintPipeline(conf)
+        
+        tmp_time = time.time()
+        text_path = os.path.join(save_folder, 'textured_mesh.obj')
+        path_textured = texture_pipeline(mesh_path=path, image_path=image, output_mesh_path=text_path, save_glb=False)
+        stats['time']['texture generation'] = time.time() - tmp_time
+
+        print("Freeing texture generation pipeline memory...")
+        texture_pipeline.free_memory()
+        del texture_pipeline
+        clear_gpu_memory()
+
+    # Standard VRAM mode: use pre-loaded global pipelines
+    else:
+        mesh, image, save_folder, stats, seed = _gen_shape(
+            i23d_worker, caption, image, mv_image_front, mv_image_back, mv_image_left, mv_image_right,
+            steps, guidance_scale, seed, octree_resolution, check_box_rembg, num_chunks, randomize_seed
+        )
+        path = export_mesh(mesh, save_folder, textured=False)
+
+        tmp_time = time.time()
+        mesh = face_reduce_worker(mesh)
+        path = export_mesh(mesh, save_folder, textured=False, type='obj')
+        stats['time']['face reduction'] = time.time() - tmp_time
+
+        tmp_time = time.time()
+        text_path = os.path.join(save_folder, f'textured_mesh.obj')
+        path_textured = tex_pipeline(mesh_path=path, image_path=image, output_mesh_path=text_path, save_glb=False)
+        stats['time']['texture generation'] = time.time() - tmp_time
+
+    # --- Common final steps ---
     tmp_time = time.time()
-    # Convert textured OBJ to GLB using obj2gltf with PBR support
     glb_path_textured = os.path.join(save_folder, 'textured_mesh.glb')
-    conversion_success = quick_convert_with_obj2gltf(path_textured, glb_path_textured)
-
-    logger.info("---Convert textured OBJ to GLB takes %s seconds ---" % (time.time() - tmp_time))
+    quick_convert_with_obj2gltf(path_textured, glb_path_textured)
     stats['time']['convert textured OBJ to GLB'] = time.time() - tmp_time
     stats['time']['total'] = time.time() - start_time_0
-    model_viewer_html_textured = build_model_viewer_html(save_folder, 
-                                                         height=HTML_HEIGHT, 
-                                                         width=HTML_WIDTH, textured=True)
-    if args.low_vram_mode:
-        torch.cuda.empty_cache()
+    
+    model_viewer_html_textured = build_model_viewer_html(save_folder, height=HTML_HEIGHT, width=HTML_WIDTH, textured=True)
+    
     return (
         gr.update(value=path),
         gr.update(value=glb_path_textured),
@@ -423,28 +453,40 @@ def shape_generation(
     randomize_seed: bool = False,
 ):
     start_time_0 = time.time()
-    mesh, image, save_folder, stats, seed = _gen_shape(
-        caption,
-        image,
-        mv_image_front=mv_image_front,
-        mv_image_back=mv_image_back,
-        mv_image_left=mv_image_left,
-        mv_image_right=mv_image_right,
-        steps=steps,
-        guidance_scale=guidance_scale,
-        seed=seed,
-        octree_resolution=octree_resolution,
-        check_box_rembg=check_box_rembg,
-        num_chunks=num_chunks,
-        randomize_seed=randomize_seed,
-    )
+    
+    # Low VRAM mode: load, run, and free the pipeline
+    if args.low_vram_mode:
+        print("Running in Low VRAM mode (sequential pipeline execution).")
+        print("Loading shape generation pipeline...")
+        shape_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
+            args.model_path, subfolder=args.subfolder, use_safetensors=False, device=args.device, dtype=DTYPE
+        )
+        if args.enable_flashvdm:
+            shape_pipeline.enable_flashvdm(mc_algo='mc' if args.device in ['cpu', 'mps'] else args.mc_algo)
+        
+        mesh, image, save_folder, stats, seed = _gen_shape(
+            shape_pipeline, caption, image, mv_image_front, mv_image_back, mv_image_left, mv_image_right,
+            steps, guidance_scale, seed, octree_resolution, check_box_rembg, num_chunks, randomize_seed
+        )
+        
+        print("Freeing shape generation pipeline memory...")
+        shape_pipeline.free_memory()
+        del shape_pipeline
+        clear_gpu_memory()
+
+    # Standard VRAM mode: use pre-loaded global pipeline
+    else:
+        mesh, image, save_folder, stats, seed = _gen_shape(
+            i23d_worker, caption, image, mv_image_front, mv_image_back, mv_image_left, mv_image_right,
+            steps, guidance_scale, seed, octree_resolution, check_box_rembg, num_chunks, randomize_seed
+        )
+
     stats['time']['total'] = time.time() - start_time_0
     mesh.metadata['extras'] = stats
 
     path = export_mesh(mesh, save_folder, textured=False)
     model_viewer_html = build_model_viewer_html(save_folder, height=HTML_HEIGHT, width=HTML_WIDTH)
-    if args.low_vram_mode:
-        torch.cuda.empty_cache()
+    
     return (
         gr.update(value=path),
         model_viewer_html,
@@ -751,6 +793,8 @@ if __name__ == '__main__':
     parser.add_argument('--low_vram_mode', action='store_true')
     args = parser.parse_args()
     
+    DTYPE = torch.float16
+
     SAVE_DIR = args.cache_path
     os.makedirs(SAVE_DIR, exist_ok=True)
 
@@ -779,6 +823,11 @@ if __name__ == '__main__':
 
     SUPPORTED_FORMATS = ['glb', 'obj', 'ply', 'stl']
 
+    # Initialize pipeline variables to None
+    tex_pipeline = None
+    i23d_worker = None
+    t2i_worker = None
+    
     HAS_TEXTUREGEN = False
     if not args.disable_tex:
         try:
@@ -792,25 +841,17 @@ if __name__ == '__main__':
             except Exception as fix_error:
                 print(f"Warning: Failed to apply torchvision fix: {fix_error}")
             
-            # from hy3dgen.texgen import Hunyuan3DPaintPipeline
-            # texgen_worker = Hunyuan3DPaintPipeline.from_pretrained(args.texgen_model_path)
-            # if args.low_vram_mode:
-            #     texgen_worker.enable_model_cpu_offload()
-
             from hy3dpaint.textureGenPipeline import Hunyuan3DPaintPipeline, Hunyuan3DPaintConfig
-            conf = Hunyuan3DPaintConfig(max_num_view=8, resolution=768)
-            conf.realesrgan_ckpt_path = "hy3dpaint/ckpt/RealESRGAN_x4plus.pth"
-            conf.multiview_cfg_path = "hy3dpaint/cfgs/hunyuan-paint-pbr.yaml"
-            conf.custom_pipeline = "hy3dpaint/hunyuanpaintpbr"
-            tex_pipeline = Hunyuan3DPaintPipeline(conf)
-        
-            # Not help much, ignore for now.
-            # if args.compile:
-            #     texgen_worker.models['delight_model'].pipeline.unet.compile()
-            #     texgen_worker.models['delight_model'].pipeline.vae.compile()
-            #     texgen_worker.models['multiview_model'].pipeline.unet.compile()
-            #     texgen_worker.models['multiview_model'].pipeline.vae.compile()
             
+            # Only pre-load in standard VRAM mode
+            if not args.low_vram_mode:
+                print("Pre-loading texture pipeline for standard VRAM mode...")
+                conf = Hunyuan3DPaintConfig(max_num_view=8, resolution=768)
+                conf.realesrgan_ckpt_path = "hy3dpaint/ckpt/RealESRGAN_x4plus.pth"
+                conf.multiview_cfg_path = "hy3dpaint/cfgs/hunyuan-paint-pbr.yaml"
+                conf.custom_pipeline = "hy3dpaint/hunyuanpaintpbr"
+                tex_pipeline = Hunyuan3DPaintPipeline(conf)
+        
             HAS_TEXTUREGEN = True
             
         except Exception as e:
@@ -821,12 +862,11 @@ if __name__ == '__main__':
             print('Please try to install requirements by following README.md')
             HAS_TEXTUREGEN = False
 
-    HAS_T2I = True
-    if args.enable_t23d:
+    HAS_T2I = args.enable_t23d
+    if HAS_T2I and not args.low_vram_mode:
+        print("Pre-loading T2I pipeline for standard VRAM mode...")
         from hy3dgen.text2image import HunyuanDiTPipeline
-
         t2i_worker = HunyuanDiTPipeline('Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled')
-        HAS_T2I = True
 
     from hy3dshape import FaceReducer, FloaterRemover, DegenerateFaceRemover, MeshSimplifier, \
         Hunyuan3DDiTFlowMatchingPipeline
@@ -834,21 +874,27 @@ if __name__ == '__main__':
     from hy3dshape.rembg import BackgroundRemover
 
     rmbg_worker = BackgroundRemover()
-    i23d_worker = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
-        args.model_path,
-        subfolder=args.subfolder,
-        use_safetensors=False,
-        device=args.device,
-    )
-    if args.enable_flashvdm:
-        mc_algo = 'mc' if args.device in ['cpu', 'mps'] else args.mc_algo
-        i23d_worker.enable_flashvdm(mc_algo=mc_algo)
-    if args.compile:
-        i23d_worker.compile()
+    
+    # Only pre-load in standard VRAM mode
+    if not args.low_vram_mode:
+        print("Pre-loading shape pipeline for standard VRAM mode...")
+        i23d_worker = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
+            args.model_path,
+            subfolder=args.subfolder,
+            use_safetensors=False,
+            device=args.device,
+            dtype=DTYPE,
+        )
+        if args.enable_flashvdm:
+            mc_algo = 'mc' if args.device in ['cpu', 'mps'] else args.mc_algo
+            i23d_worker.enable_flashvdm(mc_algo=mc_algo)
+        if args.compile:
+            i23d_worker.compile()
 
     floater_remove_worker = FloaterRemover()
     degenerate_face_remove_worker = DegenerateFaceRemover()
     face_reduce_worker = FaceReducer()
+
 
     # https://discuss.huggingface.co/t/how-to-serve-an-html-file/33921/2
     # create a FastAPI app

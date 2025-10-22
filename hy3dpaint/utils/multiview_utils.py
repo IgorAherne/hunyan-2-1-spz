@@ -15,6 +15,7 @@
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
 import os
+import gc
 import torch
 import random
 import numpy as np
@@ -45,25 +46,41 @@ class multiviewDiffusionNet:
         pipeline = DiffusionPipeline.from_pretrained(
             model_path,
             custom_pipeline=custom_pipeline, 
-            torch_dtype=torch.float16
+            torch_dtype=torch.float16,
+            low_cpu_mem_usage=True,
         )
 
         pipeline.scheduler = UniPCMultistepScheduler.from_config(pipeline.scheduler.config, timestep_spacing="trailing")
         pipeline.set_progress_bar_config(disable=True)
         pipeline.eval()
         setattr(pipeline, "view_size", cfg.model.params.get("view_size", 320))
-        self.pipeline = pipeline.to(self.device)
+        
+        # Enable model CPU offloading to save VRAM
+        pipeline.enable_model_cpu_offload()
+        
+        self.pipeline = pipeline # Keep on CPU/managed by accelerate
 
         if hasattr(self.pipeline.unet, "use_dino") and self.pipeline.unet.use_dino:
             from hunyuanpaintpbr.unet.modules import Dino_v2
+            # Use bfloat16 for Dino
             self.dino_v2 = Dino_v2(config.dino_ckpt_path).to(torch.float16)
-            self.dino_v2 = self.dino_v2.to(self.device)
+            # Keep DINO on CPU to save VRAM
 
     def seed_everything(self, seed):
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
         os.environ["PL_GLOBAL_SEED"] = str(seed)
+
+    def free_memory(self):
+        """Frees up memory by deleting models and clearing cache."""
+        if hasattr(self, 'pipeline'):
+            del self.pipeline
+        if hasattr(self, 'dino_v2'):
+            del self.dino_v2
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     @torch.no_grad()
     def __call__(self, images, conditions, prompt=None, custom_view_size=None, resize_input=False):
@@ -87,7 +104,11 @@ class multiviewDiffusionNet:
             control_images[i] = control_images[i].resize((custom_view_size, custom_view_size))
             if control_images[i].mode == "L":
                 control_images[i] = control_images[i].point(lambda x: 255 if x > 1 else 0, mode="1")
-        kwargs = dict(generator=torch.Generator(device=self.pipeline.device).manual_seed(0))
+        
+        # Use the pipeline's execution device for the generator
+        pipeline_device = self.pipeline._execution_device
+
+        kwargs = dict(generator=torch.Generator(device=pipeline_device).manual_seed(0))
 
         num_view = len(control_images) // 2
         normal_image = [[control_images[i] for i in range(num_view)]]
@@ -100,8 +121,13 @@ class multiviewDiffusionNet:
         kwargs["images_position"] = position_image
 
         if hasattr(self.pipeline.unet, "use_dino") and self.pipeline.unet.use_dino:
+            dino_device = self.pipeline._execution_device
+            self.dino_v2.to(dino_device)
             dino_hidden_states = self.dino_v2(input_images[0])
             kwargs["dino_hidden_states"] = dino_hidden_states
+            self.dino_v2.to("cpu") # Offload DINO back to CPU
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         sync_condition = None
 

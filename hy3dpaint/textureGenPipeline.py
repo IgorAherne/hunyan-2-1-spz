@@ -74,7 +74,7 @@ class Hunyuan3DPaintPipeline:
 
     def __init__(self, config=None) -> None:
         self.config = config if config is not None else Hunyuan3DPaintConfig()
-        self.models = {}
+        self.models = {} # Initialize empty models dict
         self.stats_logs = {}
         self.render = MeshRender(
             default_resolution=self.config.render_size,
@@ -83,13 +83,44 @@ class Hunyuan3DPaintPipeline:
             raster_mode=self.config.raster_mode,
         )
         self.view_processor = ViewProcessor(self.config, self.render)
-        self.load_models()
+        # Do not load models automatically in __init__
+        # self.load_models()
 
-    def load_models(self):
-        torch.cuda.empty_cache()
-        self.models["super_model"] = imageSuperNet(self.config)
-        self.models["multiview_model"] = multiviewDiffusionNet(self.config)
-        print("Models Loaded.")
+    def load_model(self, model_name):
+        """Load a specific model on demand."""
+        if model_name not in self.models:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            if model_name == "super_model":
+                self.models[model_name] = imageSuperNet(self.config)
+            elif model_name == "multiview_model":
+                # Load multiview model (handles Bfloat16 and CPU offloading internally)
+                self.models[model_name] = multiviewDiffusionNet(self.config)
+            print(f"{model_name} Loaded.")
+
+    def offload_model(self, model_name):
+        """Offload a specific model from the GPU."""
+        if model_name in self.models:
+            # Use the specific free_memory method if available
+            if hasattr(self.models[model_name], 'free_memory'):
+                self.models[model_name].free_memory()
+            elif hasattr(self.models[model_name], 'to'):
+                 self.models[model_name].to("cpu")
+            
+            del self.models[model_name]
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            print(f"{model_name} Offloaded.")
+
+    def free_memory(self):
+        """Frees up all memory."""
+        self.offload_model("super_model")
+        self.offload_model("multiview_model")
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        print("Hunyuan3DPaintPipeline memory freed.")
 
     @torch.no_grad()
     def __call__(self, mesh_path=None, image_path=None, output_mesh_path=None, use_remesh=True, save_glb=True):
@@ -99,7 +130,11 @@ class Hunyuan3DPaintPipeline:
             image_prompt = Image.open(image_path)
         elif isinstance(image_path, Image.Image):
             image_prompt = image_path
-        if not isinstance(image_prompt, List):
+        
+        # Handle the case where image_path is a list
+        if isinstance(image_path, list):
+             image_prompt = image_path
+        elif not isinstance(image_prompt, List):
             image_prompt = [image_prompt]
         else:
             image_prompt = image_path
@@ -147,6 +182,8 @@ class Hunyuan3DPaintPipeline:
         image_style = [image.convert("RGB") for image in image_style]
 
         ###########  Multiview  ##########
+        # Load multiview model sequentially
+        self.load_model("multiview_model")
         multiviews_pbr = self.models["multiview_model"](
             image_style,
             normal_maps + position_maps,
@@ -154,29 +191,45 @@ class Hunyuan3DPaintPipeline:
             custom_view_size=self.config.resolution,
             resize_input=True,
         )
+        # Offload multiview model
+        self.offload_model("multiview_model")
+
         ###########  Enhance  ##########
         enhance_images = {}
         enhance_images["albedo"] = copy.deepcopy(multiviews_pbr["albedo"])
-        enhance_images["mr"] = copy.deepcopy(multiviews_pbr["mr"])
+        # Check if 'mr' exists before processing
+        if "mr" in multiviews_pbr:
+            enhance_images["mr"] = copy.deepcopy(multiviews_pbr["mr"])
 
+        # Load super-resolution model sequentially
+        self.load_model("super_model")
         for i in range(len(enhance_images["albedo"])):
             enhance_images["albedo"][i] = self.models["super_model"](enhance_images["albedo"][i])
-            enhance_images["mr"][i] = self.models["super_model"](enhance_images["mr"][i])
+            if "mr" in enhance_images:
+                enhance_images["mr"][i] = self.models["super_model"](enhance_images["mr"][i])
+        
+        # Offload super-resolution model
+        self.offload_model("super_model")
 
         ###########  Bake  ##########
-        for i in range(len(enhance_images)):
+        # Ensure correct loop iteration count
+        for i in range(len(enhance_images["albedo"])):
             enhance_images["albedo"][i] = enhance_images["albedo"][i].resize(
                 (self.config.render_size, self.config.render_size)
             )
-            enhance_images["mr"][i] = enhance_images["mr"][i].resize((self.config.render_size, self.config.render_size))
+            if "mr" in enhance_images:
+                enhance_images["mr"][i] = enhance_images["mr"][i].resize((self.config.render_size, self.config.render_size))
+        
         texture, mask = self.view_processor.bake_from_multiview(
             enhance_images["albedo"], selected_camera_elevs, selected_camera_azims, selected_view_weights
         )
         mask_np = (mask.squeeze(-1).cpu().numpy() * 255).astype(np.uint8)
-        texture_mr, mask_mr = self.view_processor.bake_from_multiview(
-            enhance_images["mr"], selected_camera_elevs, selected_camera_azims, selected_view_weights
-        )
-        mask_mr_np = (mask_mr.squeeze(-1).cpu().numpy() * 255).astype(np.uint8)
+        
+        if "mr" in enhance_images:
+            texture_mr, mask_mr = self.view_processor.bake_from_multiview(
+                enhance_images["mr"], selected_camera_elevs, selected_camera_azims, selected_view_weights
+            )
+            mask_mr_np = (mask_mr.squeeze(-1).cpu().numpy() * 255).astype(np.uint8)
 
         ##########  inpaint  ###########
         texture = self.view_processor.texture_inpaint(texture, mask_np)

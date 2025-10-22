@@ -222,7 +222,7 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
         images_vae = [torch.tensor(np.array(image) / 255.0) for image in images]
         images_vae = [image_vae.unsqueeze(0).permute(0, 3, 1, 2).unsqueeze(0) for image_vae in images_vae]
         images_vae = torch.cat(images_vae, dim=1)
-        images_vae = images_vae.to(device=self.vae.device, dtype=self.unet.dtype)
+        images_vae = images_vae.to(device=self._execution_device, dtype=self.unet.dtype)
 
         batch_size = images_vae.shape[0]
         N_ref = images_vae.shape[1]
@@ -244,7 +244,7 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                     if img.shape[2] > 3:
                         alpha = img[:, :, 3:]
                         img = img[:, :, :3] * alpha + bg_c * (1 - alpha)
-                    img = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).contiguous().half().to("cuda")
+                    img = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).contiguous().half().to(self._execution_device)
                     view_imgs.append(img)
                 view_imgs = torch.cat(view_imgs, dim=0)
                 images_tensor.append(view_imgs.unsqueeze(0))
