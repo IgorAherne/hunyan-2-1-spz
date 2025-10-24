@@ -17,6 +17,7 @@
 import os
 import json
 import copy
+import gc
 import numpy as np
 import torch
 import torch.nn as nn
@@ -957,6 +958,8 @@ class UNet2p5DConditionModel(torch.nn.Module):
         Returns:
             torch.Tensor: Output features
         """
+        print('modules.py FORWARD 1')
+        input()
 
         B, N_pbr, N_gen, _, H, W = sample.shape
         assert H == W
@@ -996,8 +999,16 @@ class UNet2p5DConditionModel(torch.nn.Module):
                         voxel_resolutions=[H * 8, H * 4, H * 2, H],
                     )
                     cached_condition["cache"]["position_voxel_indices"] = position_voxel_indices
+                    if "position_maps" in cached_condition:
+                        del cached_condition["position_maps"]
+                        gc.collect()
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
         else:
             position_voxel_indices = None
+
+        print('modules.py FORWARD 2')
+        input()
 
         if self.use_dino:
             if "dino_hidden_states_proj" in cached_condition["cache"]:
@@ -1007,10 +1018,21 @@ class UNet2p5DConditionModel(torch.nn.Module):
                 dino_hidden_states = cached_condition["dino_hidden_states"]
                 dino_hidden_states = self.image_proj_model_dino(dino_hidden_states)
                 cached_condition["cache"]["dino_hidden_states_proj"] = dino_hidden_states
+                if "dino_hidden_states" in cached_condition:
+                    del cached_condition["dino_hidden_states"]
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
         else:
             dino_hidden_states = None
 
+
+        print('modules.py FORWARD 3')
+        input()
+
         if self.use_ra:
+            print('modules.py FORWARD 1-ra')
+            input()
             if "condition_embed_dict" in cached_condition["cache"]:
                 condition_embed_dict = cached_condition["cache"]["condition_embed_dict"]
             else:
@@ -1050,6 +1072,9 @@ class UNet2p5DConditionModel(torch.nn.Module):
                     unet_ref = self.unet_dual
                 else:
                     unet_ref = self.unet
+
+                unet_ref.to(self.unet.device)
+
                 unet_ref(
                     noisy_ref_latents,
                     timestep_ref,
@@ -1065,12 +1090,34 @@ class UNet2p5DConditionModel(torch.nn.Module):
                     },
                 )
                 cached_condition["cache"]["condition_embed_dict"] = condition_embed_dict
+                if "ref_latents" in cached_condition:
+                    del cached_condition["ref_latents"]
+                
+                # Aggressively clear VRAM after the reference pass is complete.
+                # Manually offload the reference UNet to CPU, as its job is done for this step.
+                unet_ref.to("cpu")
+                
+                # Delete all other large tensors from the reference pass that are no longer needed.
+                del unet_ref, noisy_ref_latents, encoder_hidden_states_ref
+                if 'added_cond_kwargs_ref' in locals():
+                    del added_cond_kwargs_ref
+                
+                # Force garbage collection and empty the CUDA cache to maximize available VRAM
+                # before the main denoising pass begins.
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
         else:
             condition_embed_dict = None
+
+        print('modules.py FORWARD 4')
+        input()
 
         mva_scale = cached_condition.get("mva_scale", 1.0)
         ref_scale = cached_condition.get("ref_scale", 1.0)
 
+        print('modules.py FORWARD 5')
+        input()
         return self.unet(
             sample,
             timestep,

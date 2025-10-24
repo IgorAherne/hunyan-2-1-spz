@@ -23,74 +23,87 @@ from PIL import Image
 from typing import List
 import huggingface_hub
 from omegaconf import OmegaConf
-from diffusers import DiffusionPipeline
+
+from diffusers import UNet2DConditionModel, AutoencoderKL
 from diffusers import EulerAncestralDiscreteScheduler, DDIMScheduler, UniPCMultistepScheduler
+from diffusers.models.transformers.transformer_2d import BasicTransformerBlock
+
+from hy3dpaint.hunyuanpaintpbr.pipeline import HunyuanPaintPipeline
+from hy3dpaint.hunyuanpaintpbr.unet.modules import UNet2p5DConditionModel, Basic2p5DTransformerBlock
+
+from transformers import CLIPTextModel, CLIPTokenizer, CLIPImageProcessor
 
 
 class multiviewDiffusionNet:
     def __init__(self, config) -> None:
         self.device = config.device
 
-        print("M1")
-        input()
-
         cfg_path = config.multiview_cfg_path
-        custom_pipeline = os.path.join(os.path.dirname(__file__),"..","hunyuanpaintpbr")
+        # custom_pipeline = os.path.join(os.path.dirname(__file__),"..","hunyuanpaintpbr") # to be deleted
         cfg = OmegaConf.load(cfg_path)
         self.cfg = cfg
         self.mode = self.cfg.model.params.stable_diffusion_config.custom_pipeline[2:]
-
-        print("M2")
-        input()
 
         model_path = huggingface_hub.snapshot_download(
             repo_id=config.multiview_pretrained_path,
             allow_patterns=["hunyuan3d-paintpbr-v2-1/*"],
         )
 
-        print("M3")
-        input()
-
         model_path = os.path.join(model_path, "hunyuan3d-paintpbr-v2-1")
-        pipeline = DiffusionPipeline.from_pretrained(
-            model_path,
-            custom_pipeline=custom_pipeline, 
-            torch_dtype=torch.float16,
-            low_cpu_mem_usage=True,
-        )
+        
+        # Manually load components to ensure local code is used, bypassing diffusers' caching of custom pipelines.
+        vae = AutoencoderKL.from_pretrained(model_path, subfolder="vae", torch_dtype=torch.float16)
+        text_encoder = CLIPTextModel.from_pretrained(model_path, subfolder="text_encoder", torch_dtype=torch.float16)
+        tokenizer = CLIPTokenizer.from_pretrained(model_path, subfolder="tokenizer")
+        
+        # Use the custom UNet's from_pretrained method to load the model with the correct architecture.
+        unet_path = os.path.join(model_path, "unet")
+        unet = UNet2p5DConditionModel.from_pretrained(unet_path, torch_dtype=torch.float16)
+        
+        feature_extractor = CLIPImageProcessor.from_pretrained(model_path, subfolder="feature_extractor")
+        scheduler = EulerAncestralDiscreteScheduler.from_pretrained(model_path, subfolder="scheduler")
 
-        print("M4")
-        input()
+        pipeline = HunyuanPaintPipeline(
+            vae=vae,
+            text_encoder=text_encoder,
+            tokenizer=tokenizer,
+            unet=unet,
+            scheduler=scheduler,
+            feature_extractor=feature_extractor,
+        )
 
         pipeline.scheduler = UniPCMultistepScheduler.from_config(pipeline.scheduler.config, timestep_spacing="trailing")
         pipeline.set_progress_bar_config(disable=True)
         pipeline.eval()
         setattr(pipeline, "view_size", cfg.model.params.get("view_size", 320))
 
-        print("M5")
-        input()
-        
+        # Apply VRAM optimizations to both the main UNet and the dual-stream UNet.
+        main_unet = pipeline.unet.unet
+        dual_unet = pipeline.unet.unet_dual
+
+        # 1. Enable Gradient Checkpointing for both
+        main_unet.enable_gradient_checkpointing()
+        if dual_unet is not None:
+            dual_unet.enable_gradient_checkpointing()
+
+        # 2. Manually enable Forward Chunking for both
+        for unet_model in [main_unet, dual_unet]:
+            if unet_model is None:
+                continue
+            for mod in unet_model.modules():
+                if isinstance(mod, (BasicTransformerBlock, Basic2p5DTransformerBlock)):
+                    mod._chunk_size = 1
+                    mod._chunk_dim = 1
+
         # Enable model CPU offloading to save VRAM
         pipeline.enable_model_cpu_offload()
 
-        print("M6")
-        input()
-        
         self.pipeline = pipeline # Keep on CPU/managed by accelerate
-
-        print("M7")
-        input()
 
         if hasattr(self.pipeline.unet, "use_dino") and self.pipeline.unet.use_dino:
             from hunyuanpaintpbr.unet.modules import Dino_v2
-            # Use bfloat16 for Dino
-            print("MD1")
-            input()
             self.dino_v2 = Dino_v2(config.dino_ckpt_path).to(torch.float16)
             # Keep DINO on CPU to save VRAM
-
-            print("MD2")
-            input()
 
     def seed_everything(self, seed):
         random.seed(seed)
