@@ -18,6 +18,7 @@
     <CommandLineArguments>--low_vram_mode</CommandLineArguments>
     <EnableNativeCodeDebugging>False</EnableNativeCodeDebugging>
     <InterpreterPath>C:\_myDrive\repos\hunyan-2-1-spz\code\venv\Scripts\python.exe</InterpreterPath>
+    <SuppressPackageInstallationPrompt>True</SuppressPackageInstallationPrompt>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
     <DebugSymbols>true</DebugSymbols>
