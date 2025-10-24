@@ -273,9 +273,17 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                 all_shading_tokens.append(
                     getattr(self.unet, f"learned_text_clip_{token}").unsqueeze(dim=0).repeat(batch_size, 1, 1)
                 )
+            print("A")
+            input()
             prompt_embeds = torch.stack(all_shading_tokens, dim=1)
             negative_prompt_embeds = torch.stack(all_shading_tokens, dim=1)
+            print("B")
+            input()
+            prompt_embeds = prompt_embeds.to(device=self._execution_device, dtype=self.unet.dtype)
+            negative_prompt_embeds = negative_prompt_embeds.to(device=self._execution_device, dtype=self.unet.dtype)
             # negative_prompt_embeds = torch.zeros_like(prompt_embeds)
+            print("C")
+            input()
 
         else:
             if prompt is None:
@@ -300,6 +308,8 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                 negative_prompt_embeds = torch.zeros_like(prompt_embeds)
 
         if guidance_scale > 1:
+            print("D")
+            input()
             if self.unet.use_ra:
                 cached_condition["ref_latents"] = cached_condition["ref_latents"].repeat(
                     3, *([1] * (cached_condition["ref_latents"].dim() - 1))
@@ -327,7 +337,8 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                 cached_condition["position_maps"] = cached_condition["position_maps"].repeat(
                     3, *([1] * (cached_condition["position_maps"].dim() - 1))
                 )
-
+        print("E")
+        input()
         images = self.denoise(
             None,
             *args,
@@ -343,7 +354,8 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
             return_dict=return_dict,
             **cached_condition,
         )
-
+        print("F")
+        input()
         return images
 
     def denoise(

@@ -31,16 +31,25 @@ class multiviewDiffusionNet:
     def __init__(self, config) -> None:
         self.device = config.device
 
+        print("M1")
+        input()
+
         cfg_path = config.multiview_cfg_path
         custom_pipeline = os.path.join(os.path.dirname(__file__),"..","hunyuanpaintpbr")
         cfg = OmegaConf.load(cfg_path)
         self.cfg = cfg
         self.mode = self.cfg.model.params.stable_diffusion_config.custom_pipeline[2:]
 
+        print("M2")
+        input()
+
         model_path = huggingface_hub.snapshot_download(
             repo_id=config.multiview_pretrained_path,
             allow_patterns=["hunyuan3d-paintpbr-v2-1/*"],
         )
+
+        print("M3")
+        input()
 
         model_path = os.path.join(model_path, "hunyuan3d-paintpbr-v2-1")
         pipeline = DiffusionPipeline.from_pretrained(
@@ -50,21 +59,38 @@ class multiviewDiffusionNet:
             low_cpu_mem_usage=True,
         )
 
+        print("M4")
+        input()
+
         pipeline.scheduler = UniPCMultistepScheduler.from_config(pipeline.scheduler.config, timestep_spacing="trailing")
         pipeline.set_progress_bar_config(disable=True)
         pipeline.eval()
         setattr(pipeline, "view_size", cfg.model.params.get("view_size", 320))
+
+        print("M5")
+        input()
         
         # Enable model CPU offloading to save VRAM
         pipeline.enable_model_cpu_offload()
+
+        print("M6")
+        input()
         
         self.pipeline = pipeline # Keep on CPU/managed by accelerate
+
+        print("M7")
+        input()
 
         if hasattr(self.pipeline.unet, "use_dino") and self.pipeline.unet.use_dino:
             from hunyuanpaintpbr.unet.modules import Dino_v2
             # Use bfloat16 for Dino
+            print("MD1")
+            input()
             self.dino_v2 = Dino_v2(config.dino_ckpt_path).to(torch.float16)
             # Keep DINO on CPU to save VRAM
+
+            print("MD2")
+            input()
 
     def seed_everything(self, seed):
         random.seed(seed)
