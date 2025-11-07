@@ -345,8 +345,6 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                 cached_condition["position_maps"] = cached_condition["position_maps"].repeat(
                     3, *([1] * (cached_condition["position_maps"].dim() - 1))
                 )
-        print("E")
-        input()
         images = self.denoise(
             None,
             *args,
@@ -362,8 +360,6 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
             return_dict=return_dict,
             **cached_condition,
         )
-        print("F")
-        input()
         return images
 
     def denoise(
@@ -645,8 +641,6 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                 guidance_scale_tensor, embedding_dim=self.unet.config.time_cond_proj_dim
             ).to(device=device, dtype=latents.dtype)
 
-        print('D11')
-        input()
         # 7. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         self._num_timesteps = len(timesteps)
@@ -668,9 +662,6 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                     latent_model_input, "(b n_pbr n) c h w ->b n_pbr n c h w", n=kwargs["num_in_batch"], n_pbr=n_pbr
                 )
 
-                # print('L2')
-                # input()
-
                 # predict the noise residual
 
                 noise_pred = self.unet(
@@ -684,9 +675,6 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                     **kwargs,
                 )[0]
                 latents = rearrange(latents, "b n_pbr n c h w -> (b n_pbr n) c h w")
-
-                # print('L3')
-                # input()
 
                 # perform guidance
                 if self.do_classifier_free_guidance:
@@ -723,9 +711,6 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                     # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
                     noise_pred = rescale_noise_cfg(noise_pred, noise_pred_ref, guidance_rescale=self.guidance_rescale)
 
-                # print('L4')
-                # input()
-
                 # compute the previous noisy sample x_t -> x_t-1
                 latents = self.scheduler.step(
                     noise_pred, t, latents[:, :num_channels_latents, :, :], **extra_step_kwargs, return_dict=False
@@ -734,22 +719,13 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                 if callback_on_step_end is not None:
                     callback_kwargs = {}
 
-                    print('R 0')
-                    input()
-
                     for k in callback_on_step_end_tensor_inputs:
                         callback_kwargs[k] = locals()[k]
                     callback_outputs = callback_on_step_end(self, i, t, callback_kwargs)
 
-                    print('R 1')
-                    input()
-
                     latents = callback_outputs.pop("latents", latents)
                     prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
                     negative_prompt_embeds = callback_outputs.pop("negative_prompt_embeds", negative_prompt_embeds)
-
-                    print('R 2')
-                    input()
 
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
@@ -757,9 +733,6 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                     if callback is not None and i % callback_steps == 0:
                         step_idx = i // getattr(self.scheduler, "order", 1)
                         callback(step_idx, t, latents)
-
-                # print('L6')
-                # input()
 
         if not output_type == "latent":
             image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False, generator=generator)[0]
