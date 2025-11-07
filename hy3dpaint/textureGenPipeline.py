@@ -56,7 +56,7 @@ class Hunyuan3DPaintConfig:
         self.resolution = resolution
         self.bake_exp = 4
         self.merge_method = "fast"
-        self.view_chunk_size = 2
+        self.view_chunk_size = 3
 
         # view selection
         self.candidate_camera_azims = [0, 90, 180, 270, 0, 180]
@@ -192,9 +192,9 @@ class Hunyuan3DPaintPipeline:
         num_views = len(selected_camera_elevs)
         chunk_size = self.config.view_chunk_size
 
-        for i in tqdm(range(0, num_views, chunk_size), desc="Processing views in chunks"):
+        for i in tqdm(range(0, num_views, chunk_size), desc="Processing views in chunks", position=0, leave=True):
             chunk_end = min(i + chunk_size, num_views)
-            
+        
             # Slice the condition maps for the current chunk
             chunk_normal_maps = normal_maps[i:chunk_end]
             chunk_position_maps = position_maps[i:chunk_end]
