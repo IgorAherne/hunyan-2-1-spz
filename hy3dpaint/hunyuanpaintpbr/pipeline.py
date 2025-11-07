@@ -749,12 +749,11 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
             # Chunk the VAE decoding process to reduce peak memory
             latents = latents / self.vae.config.scaling_factor
             decoded_images = []
-            for latent_slice in latents.split(1):
+            for latent_slice in latents.split(2):
                 decoded_slice = self.vae.decode(latent_slice, return_dict=False, generator=generator)[0]
                 decoded_images.append(decoded_slice)
             image = torch.cat(decoded_images, dim=0)
             
-            # image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False, generator=generator)[0] # Commented out = to be deleted
             image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
         else:
             image = latents
