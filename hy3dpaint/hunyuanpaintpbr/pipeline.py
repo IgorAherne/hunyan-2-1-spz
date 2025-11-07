@@ -239,7 +239,13 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+            
+        cached_condition["ref_latents"] = ref_latents
 
+        batch_size = ref_latents.shape[0]
+        assert batch_size == 1
+        assert num_images_per_prompt == 1
+        
         def convert_pil_list_to_tensor(images):
             bg_c = [1.0, 1.0, 1.0]
             images_tensor = []

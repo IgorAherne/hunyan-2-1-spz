@@ -162,13 +162,23 @@ class multiviewDiffusionNet:
         kwargs["images_position"] = position_image
 
         if hasattr(self.pipeline.unet, "use_dino") and self.pipeline.unet.use_dino:
-            dino_device = self.pipeline._execution_device
-            self.dino_v2.to(dino_device)
-            dino_hidden_states = self.dino_v2(input_images[0])
+            # Check cache first for DINO features
+            if cache is not None and "dino_hidden_states" in cache:
+                dino_hidden_states = cache["dino_hidden_states"].to(self.pipeline._execution_device)
+                print("Reusing cached DINO hidden states.")
+            else:
+                # If not in cache, compute and store them
+                dino_device = self.pipeline._execution_device
+                self.dino_v2.to(dino_device)
+                dino_hidden_states = self.dino_v2(input_images[0])
+                self.dino_v2.to("cpu") # Offload DINO back to CPU
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
+                if cache is not None:
+                    cache["dino_hidden_states"] = dino_hidden_states.cpu() # Store on CPU
+
             kwargs["dino_hidden_states"] = dino_hidden_states
-            self.dino_v2.to("cpu") # Offload DINO back to CPU
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
 
         sync_condition = None
 
