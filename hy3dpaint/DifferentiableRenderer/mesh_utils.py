@@ -14,11 +14,18 @@
 
 import os
 import cv2
-import bpy
 import math
 import numpy as np
 from io import StringIO
 from typing import Optional, Tuple, Dict, Any
+
+BPY_AVAILABLE = False
+try:
+    import bpy
+    BPY_AVAILABLE = True
+except (ImportError, ModuleNotFoundError):
+    print("Warning: bpy (Blender Python API) could not be imported. "
+          "Functions that rely on it, like OBJ to GLB conversion, will be disabled.")
 
 
 def _safe_extract_attribute(obj: Any, attr_path: str, default: Any = None) -> Any:
@@ -265,6 +272,9 @@ def convert_obj_to_glb(
     merge_vertices: bool = False,
 ) -> bool:
     """Convert OBJ file to GLB format using Blender."""
+    # If bpy is not available, we cannot perform the conversion.
+    if not BPY_AVAILABLE:
+        return False
     try:
         _setup_blender_scene()
         _clear_scene_objects()
