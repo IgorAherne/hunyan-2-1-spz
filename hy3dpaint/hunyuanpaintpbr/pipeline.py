@@ -668,8 +668,8 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                     latent_model_input, "(b n_pbr n) c h w ->b n_pbr n c h w", n=kwargs["num_in_batch"], n_pbr=n_pbr
                 )
 
-                print('L2')
-                input()
+                # print('L2')
+                # input()
 
                 # predict the noise residual
 
@@ -685,8 +685,8 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                 )[0]
                 latents = rearrange(latents, "b n_pbr n c h w -> (b n_pbr n) c h w")
 
-                print('L3')
-                input()
+                # print('L3')
+                # input()
 
                 # perform guidance
                 if self.do_classifier_free_guidance:
@@ -723,8 +723,8 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                     # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
                     noise_pred = rescale_noise_cfg(noise_pred, noise_pred_ref, guidance_rescale=self.guidance_rescale)
 
-                print('L4')
-                input()
+                # print('L4')
+                # input()
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents = self.scheduler.step(
@@ -758,8 +758,8 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                         step_idx = i // getattr(self.scheduler, "order", 1)
                         callback(step_idx, t, latents)
 
-                print('L6')
-                input()
+                # print('L6')
+                # input()
 
         if not output_type == "latent":
             image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False, generator=generator)[0]

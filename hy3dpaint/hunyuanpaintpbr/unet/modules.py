@@ -958,8 +958,8 @@ class UNet2p5DConditionModel(torch.nn.Module):
         Returns:
             torch.Tensor: Output features
         """
-        print('modules.py FORWARD 1')
-        input()
+        #print('modules.py FORWARD 1')
+        #input()
 
         B, N_pbr, N_gen, _, H, W = sample.shape
         assert H == W
@@ -1007,8 +1007,8 @@ class UNet2p5DConditionModel(torch.nn.Module):
         else:
             position_voxel_indices = None
 
-        print('modules.py FORWARD 2')
-        input()
+        # print('modules.py FORWARD 2')
+        # input()
 
         if self.use_dino:
             if "dino_hidden_states_proj" in cached_condition["cache"]:
@@ -1027,12 +1027,12 @@ class UNet2p5DConditionModel(torch.nn.Module):
             dino_hidden_states = None
 
 
-        print('modules.py FORWARD 3')
-        input()
+        # print('modules.py FORWARD 3')
+        # input()
 
         if self.use_ra:
-            print('modules.py FORWARD 1-ra')
-            input()
+            # print('modules.py FORWARD 1-ra')
+            # input()
             if "condition_embed_dict" in cached_condition["cache"]:
                 condition_embed_dict = cached_condition["cache"]["condition_embed_dict"]
             else:
@@ -1110,14 +1110,14 @@ class UNet2p5DConditionModel(torch.nn.Module):
         else:
             condition_embed_dict = None
 
-        print('modules.py FORWARD 4')
-        input()
+        # print('modules.py FORWARD 4')
+        # input()
 
         mva_scale = cached_condition.get("mva_scale", 1.0)
         ref_scale = cached_condition.get("ref_scale", 1.0)
 
-        print('modules.py FORWARD 5')
-        input()
+        # print('modules.py FORWARD 5')
+        # input()
         return self.unet(
             sample,
             timestep,

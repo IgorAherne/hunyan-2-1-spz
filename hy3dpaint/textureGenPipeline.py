@@ -15,6 +15,7 @@
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
 import os
+import gc
 import torch
 import copy
 import trimesh
@@ -29,6 +30,7 @@ from utils.image_super_utils import imageSuperNet
 from utils.uvwrap_utils import mesh_uv_wrap
 from DifferentiableRenderer.mesh_utils import convert_obj_to_glb
 import warnings
+from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
 from diffusers.utils import logging as diffusers_logging
@@ -54,6 +56,7 @@ class Hunyuan3DPaintConfig:
         self.resolution = resolution
         self.bake_exp = 4
         self.merge_method = "fast"
+        self.view_chunk_size = 2
 
         # view selection
         self.candidate_camera_azims = [0, 90, 180, 270, 0, 180]
@@ -184,13 +187,41 @@ class Hunyuan3DPaintPipeline:
         ###########  Multiview  ##########
         # Load multiview model sequentially
         self.load_model("multiview_model")
-        multiviews_pbr = self.models["multiview_model"](
-            image_style,
-            normal_maps + position_maps,
-            prompt=image_caption,
-            custom_view_size=self.config.resolution,
-            resize_input=True,
-        )
+        
+        all_multiviews_pbr = {"albedo": [], "mr": []}
+        num_views = len(selected_camera_elevs)
+        chunk_size = self.config.view_chunk_size
+
+        for i in tqdm(range(0, num_views, chunk_size), desc="Processing views in chunks"):
+            chunk_end = min(i + chunk_size, num_views)
+            
+            # Slice the condition maps for the current chunk
+            chunk_normal_maps = normal_maps[i:chunk_end]
+            chunk_position_maps = position_maps[i:chunk_end]
+
+            print(f"Processing chunk {i//chunk_size + 1}/{(num_views + chunk_size - 1)//chunk_size} with {len(chunk_normal_maps)} views...")
+
+            # Call the model with the smaller chunk
+            chunk_multiviews_pbr = self.models["multiview_model"](
+                image_style,
+                chunk_normal_maps + chunk_position_maps,
+                prompt=image_caption,
+                custom_view_size=self.config.resolution,
+                resize_input=True,
+            )
+            
+            # Append results from the chunk
+            all_multiviews_pbr["albedo"].extend(chunk_multiviews_pbr.get("albedo", []))
+            if "mr" in chunk_multiviews_pbr:
+                all_multiviews_pbr["mr"].extend(chunk_multiviews_pbr.get("mr", []))
+
+            # Aggressive memory clearing between chunks
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        multiviews_pbr = all_multiviews_pbr
+        
         # Offload multiview model
         self.offload_model("multiview_model")
 
