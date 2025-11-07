@@ -284,7 +284,7 @@ def _gen_shape(
     if image is None:
         worker_to_use = None
         # In low VRAM mode, t2i_worker is not pre-loaded. Load it on-demand.
-        if args.low_vram_mode and args.enable_t23d:
+        if args.enable_t23d:
             from hy3dgen.text2image import HunyuanDiTPipeline
             print("Low VRAM mode: Loading T2I pipeline on-demand...")
             worker_to_use = HunyuanDiTPipeline('Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled')
@@ -301,7 +301,7 @@ def _gen_shape(
             raise gr.Error("Text-to-3D is disabled. Please enable it with `--enable_t23d`.")
 
         # If we loaded a local T2I worker, free its memory now
-        if args.low_vram_mode and worker_to_use is not None:
+        if worker_to_use is not None:
             del worker_to_use
             clear_gpu_memory()
             print("Unloaded T2I pipeline.")
@@ -373,9 +373,7 @@ def generation_all(
         stats = {'mode': 'texture_only_debug', 'debug_mesh': debug_mesh_path, 'time': {}}
         # Use the seed from the UI if available
         seed = int(randomize_seed_fn(seed, randomize_seed))
-    
-    elif args.low_vram_mode:
-        print("Running in Low VRAM mode (sequential pipeline execution).")
+    else:
         # 1. Shape Generation
         print("Loading shape generation pipeline...")
         shape_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
@@ -388,17 +386,10 @@ def generation_all(
             shape_pipeline, caption, image, mv_image_front, mv_image_back, mv_image_left, mv_image_right,
             steps, guidance_scale, seed, octree_resolution, check_box_rembg, num_chunks, randomize_seed
         )
-        
         print("Freeing shape generation pipeline memory...")
         shape_pipeline.free_memory()
         del shape_pipeline
         clear_gpu_memory()
-
-    else: # Standard VRAM mode: use pre-loaded global pipelines
-        mesh, image, save_folder, stats, seed = _gen_shape(
-            i23d_worker, caption, image, mv_image_front, mv_image_back, mv_image_left, mv_image_right,
-            steps, guidance_scale, seed, octree_resolution, check_box_rembg, num_chunks, randomize_seed
-        )
 
     # --- Part 2: Common Mesh Post-Processing ---
     path = export_mesh(mesh, save_folder, textured=False, type='obj')
@@ -409,32 +400,24 @@ def generation_all(
     path = export_mesh(mesh, save_folder, textured=False, type='obj') # Overwrite with reduced mesh path
     stats['time']['face reduction'] = time.time() - tmp_time
 
-    # --- Part 3: Texture Generation (respecting low_vram_mode) ---
-    if args.low_vram_mode:
-        # Load, run, and unload texture pipeline
-        print("Loading texture generation pipeline...")
-        conf = Hunyuan3DPaintConfig(max_num_view=8, resolution=768)
-        conf.realesrgan_ckpt_path = "hy3dpaint/ckpt/RealESRGAN_x4plus.pth"
-        conf.multiview_cfg_path = "hy3dpaint/cfgs/hunyuan-paint-pbr.yaml"
-        conf.custom_pipeline = "hy3dpaint/hunyuanpaintpbr"
-        texture_pipeline = Hunyuan3DPaintPipeline(conf)
+    # Load, run, and unload texture pipeline
+    print("Loading texture generation pipeline...")
+    conf = Hunyuan3DPaintConfig(max_num_view=8, resolution=768, view_chunk_size=args.view_chunk_size)
+    conf.realesrgan_ckpt_path = "hy3dpaint/ckpt/RealESRGAN_x4plus.pth"
+    conf.multiview_cfg_path = "hy3dpaint/cfgs/hunyuan-paint-pbr.yaml"
+    conf.custom_pipeline = "hy3dpaint/hunyuanpaintpbr"
+    texture_pipeline = Hunyuan3DPaintPipeline(conf)
         
-        tmp_time = time.time()
-        text_path = os.path.join(save_folder, 'textured_mesh.obj')
-        path_textured = texture_pipeline(mesh_path=path, image_path=image, output_mesh_path=text_path, save_glb=False)
-        stats['time']['texture generation'] = time.time() - tmp_time
+    tmp_time = time.time()
+    text_path = os.path.join(save_folder, 'textured_mesh.obj')
+    path_textured = texture_pipeline(mesh_path=path, image_path=image, output_mesh_path=text_path, save_glb=False)
+    stats['time']['texture generation'] = time.time() - tmp_time
 
-        print("Freeing texture generation pipeline memory...")
-        texture_pipeline.free_memory()
-        del texture_pipeline
-        clear_gpu_memory()
-    else:
-        # Use pre-loaded global pipeline
-        tmp_time = time.time()
-        text_path = os.path.join(save_folder, f'textured_mesh.obj')
-        path_textured = tex_pipeline(mesh_path=path, image_path=image, output_mesh_path=text_path, save_glb=False)
-        stats['time']['texture generation'] = time.time() - tmp_time
-
+    print("Freeing texture generation pipeline memory...")
+    texture_pipeline.free_memory()
+    del texture_pipeline
+    clear_gpu_memory()
+  
     # --- Part 4: Common final steps ---
     tmp_time = time.time()
     glb_path_textured = os.path.join(save_folder, 'textured_mesh.glb')
@@ -471,32 +454,23 @@ def shape_generation(
 ):
     start_time_0 = time.time()
     
-    # Low VRAM mode: load, run, and free the pipeline
-    if args.low_vram_mode:
-        print("Running in Low VRAM mode (sequential pipeline execution).")
-        print("Loading shape generation pipeline...")
-        shape_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
-            args.model_path, subfolder=args.subfolder, use_safetensors=False, device=args.device, dtype=DTYPE
-        )
-        if args.enable_flashvdm:
-            shape_pipeline.enable_flashvdm(mc_algo='mc' if args.device in ['cpu', 'mps'] else args.mc_algo)
+    # load, run, and free the pipeline
+    print("Loading shape generation pipeline...")
+    shape_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
+        args.model_path, subfolder=args.subfolder, use_safetensors=False, device=args.device, dtype=DTYPE
+    )
+    if args.enable_flashvdm:
+        shape_pipeline.enable_flashvdm(mc_algo='mc' if args.device in ['cpu', 'mps'] else args.mc_algo)
         
-        mesh, image, save_folder, stats, seed = _gen_shape(
-            shape_pipeline, caption, image, mv_image_front, mv_image_back, mv_image_left, mv_image_right,
-            steps, guidance_scale, seed, octree_resolution, check_box_rembg, num_chunks, randomize_seed
-        )
-        
-        print("Freeing shape generation pipeline memory...")
-        shape_pipeline.free_memory()
-        del shape_pipeline
-        clear_gpu_memory()
+    mesh, image, save_folder, stats, seed = _gen_shape(
+        shape_pipeline, caption, image, mv_image_front, mv_image_back, mv_image_left, mv_image_right,
+        steps, guidance_scale, seed, octree_resolution, check_box_rembg, num_chunks, randomize_seed
+    )
+    print("Freeing shape generation pipeline memory...")
+    shape_pipeline.free_memory()
+    del shape_pipeline
+    clear_gpu_memory()
 
-    # Standard VRAM mode: use pre-loaded global pipeline
-    else:
-        mesh, image, save_folder, stats, seed = _gen_shape(
-            i23d_worker, caption, image, mv_image_front, mv_image_back, mv_image_left, mv_image_right,
-            steps, guidance_scale, seed, octree_resolution, check_box_rembg, num_chunks, randomize_seed
-        )
 
     stats['time']['total'] = time.time() - start_time_0
     mesh.metadata['extras'] = stats
@@ -807,7 +781,7 @@ if __name__ == '__main__':
     parser.add_argument('--disable_tex', action='store_true')
     parser.add_argument('--enable_flashvdm', action='store_true')
     parser.add_argument('--compile', action='store_true')
-    parser.add_argument('--low_vram_mode', action='store_true')
+    parser.add_argument('--view_chunk_size', type=int, default=3, help="Number of views to process in a single batch for texture generation. Set to 0 to disable chunking.")
     args = parser.parse_args()
     
     DTYPE = torch.float16
@@ -860,15 +834,6 @@ if __name__ == '__main__':
             
             from hy3dpaint.textureGenPipeline import Hunyuan3DPaintPipeline, Hunyuan3DPaintConfig
             
-            # Only pre-load in standard VRAM mode
-            if not args.low_vram_mode:
-                print("Pre-loading texture pipeline for standard VRAM mode...")
-                conf = Hunyuan3DPaintConfig(max_num_view=8, resolution=768)
-                conf.realesrgan_ckpt_path = "hy3dpaint/ckpt/RealESRGAN_x4plus.pth"
-                conf.multiview_cfg_path = "hy3dpaint/cfgs/hunyuan-paint-pbr.yaml"
-                conf.custom_pipeline = "hy3dpaint/hunyuanpaintpbr"
-                tex_pipeline = Hunyuan3DPaintPipeline(conf)
-        
             HAS_TEXTUREGEN = True
             
         except Exception as e:
@@ -880,7 +845,7 @@ if __name__ == '__main__':
             HAS_TEXTUREGEN = False
 
     HAS_T2I = args.enable_t23d
-    if HAS_T2I and not args.low_vram_mode:
+    if HAS_T2I:
         print("Pre-loading T2I pipeline for standard VRAM mode...")
         from hy3dgen.text2image import HunyuanDiTPipeline
         t2i_worker = HunyuanDiTPipeline('Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled')
@@ -892,22 +857,6 @@ if __name__ == '__main__':
 
     rmbg_worker = BackgroundRemover()
     
-    # Only pre-load in standard VRAM mode
-    if not args.low_vram_mode:
-        print("Pre-loading shape pipeline for standard VRAM mode...")
-        i23d_worker = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
-            args.model_path,
-            subfolder=args.subfolder,
-            use_safetensors=False,
-            device=args.device,
-            dtype=DTYPE,
-        )
-        if args.enable_flashvdm:
-            mc_algo = 'mc' if args.device in ['cpu', 'mps'] else args.mc_algo
-            i23d_worker.enable_flashvdm(mc_algo=mc_algo)
-        if args.compile:
-            i23d_worker.compile()
-
     floater_remove_worker = FloaterRemover()
     degenerate_face_remove_worker = DegenerateFaceRemover()
     face_reduce_worker = FaceReducer()
@@ -923,8 +872,7 @@ if __name__ == '__main__':
     app.mount("/static", StaticFiles(directory=static_dir, html=True), name="static")
     shutil.copytree('./assets/env_maps', os.path.join(static_dir, 'env_maps'), dirs_exist_ok=True)
 
-    if args.low_vram_mode:
-        torch.cuda.empty_cache()
+    torch.cuda.empty_cache()
     demo = build_app()
     app = gr.mount_gradio_app(app, demo, path="/")
     uvicorn.run(app, host=args.host, port=args.port)

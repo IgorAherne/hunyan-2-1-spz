@@ -39,7 +39,7 @@ diffusers_logging.set_verbosity(50)
 
 
 class Hunyuan3DPaintConfig:
-    def __init__(self, max_num_view, resolution):
+    def __init__(self, max_num_view, resolution, view_chunk_size=6):
         self.device = "cuda"
 
         self.multiview_cfg_path = "hy3dpaint/cfgs/hunyuan-paint-pbr.yaml"
@@ -53,10 +53,10 @@ class Hunyuan3DPaintConfig:
         self.render_size = 1024 * 2
         self.texture_size = 1024 * 4
         self.max_selected_view_num = max_num_view
+        self.view_chunk_size = view_chunk_size if view_chunk_size > 0 else max_num_view
         self.resolution = resolution
         self.bake_exp = 4
         self.merge_method = "fast"
-        self.view_chunk_size = 3
 
         # view selection
         self.candidate_camera_azims = [0, 90, 180, 270, 0, 180]
