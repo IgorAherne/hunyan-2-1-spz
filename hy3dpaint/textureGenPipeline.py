@@ -191,6 +191,7 @@ class Hunyuan3DPaintPipeline:
         all_multiviews_pbr = {"albedo": [], "mr": []}
         num_views = len(selected_camera_elevs)
         chunk_size = self.config.view_chunk_size
+        persistent_cache = {} # Create a cache that will persist across chunks
 
         for i in tqdm(range(0, num_views, chunk_size), desc="Processing views in chunks", position=0, leave=True):
             chunk_end = min(i + chunk_size, num_views)
@@ -208,6 +209,7 @@ class Hunyuan3DPaintPipeline:
                 prompt=image_caption,
                 custom_view_size=self.config.resolution,
                 resize_input=True,
+                cache=persistent_cache # Pass the persistent cache
             )
             
             # Append results from the chunk

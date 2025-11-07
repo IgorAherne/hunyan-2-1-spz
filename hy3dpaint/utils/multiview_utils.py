@@ -122,13 +122,13 @@ class multiviewDiffusionNet:
             torch.cuda.empty_cache()
 
     @torch.no_grad()
-    def __call__(self, images, conditions, prompt=None, custom_view_size=None, resize_input=False):
+    def __call__(self, images, conditions, prompt=None, custom_view_size=None, resize_input=False, cache=None):
         pils = self.forward_one(
-            images, conditions, prompt=prompt, custom_view_size=custom_view_size, resize_input=resize_input
+            images, conditions, prompt=prompt, custom_view_size=custom_view_size, resize_input=resize_input, cache=cache
         )
         return pils
 
-    def forward_one(self, input_images, control_images, prompt=None, custom_view_size=None, resize_input=False):
+    def forward_one(self, input_images, control_images, prompt=None, custom_view_size=None, resize_input=False, cache=None):
         self.seed_everything(0)
         custom_view_size = custom_view_size if custom_view_size is not None else self.pipeline.view_size
         if not isinstance(input_images, List):
@@ -148,6 +148,8 @@ class multiviewDiffusionNet:
         pipeline_device = self.pipeline._execution_device
 
         kwargs = dict(generator=torch.Generator(device=pipeline_device).manual_seed(0))
+        if cache is not None:
+            kwargs["cache"] = cache
 
         num_view = len(control_images) // 2
         normal_image = [[control_images[i] for i in range(num_view)]]
