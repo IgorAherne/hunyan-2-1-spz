@@ -594,6 +594,10 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
                 norm_hidden_states, "(b n_pbr n) l c -> b n_pbr (n l) c", n=num_in_batch, n_pbr=N_pbr
             )[:, 0, ...]
 
+            # The `condition_embed` tensor comes from a CPU cache, so it must be moved to the
+            # same device as the `hidden_states` before being used in the attention mechanism.
+            condition_embed = condition_embed.to(hidden_states.device)
+
             attn_output = self.attn_refview(
                 ref_norm_hidden_states,
                 encoder_hidden_states=condition_embed,
@@ -958,8 +962,6 @@ class UNet2p5DConditionModel(torch.nn.Module):
         Returns:
             torch.Tensor: Output features
         """
-        #print('modules.py FORWARD 1')
-        #input()
 
         B, N_pbr, N_gen, _, H, W = sample.shape
         assert H == W
@@ -1007,9 +1009,6 @@ class UNet2p5DConditionModel(torch.nn.Module):
         else:
             position_voxel_indices = None
 
-        # print('modules.py FORWARD 2')
-        # input()
-
         if self.use_dino:
             if "dino_hidden_states_proj" in cached_condition["cache"]:
                 dino_hidden_states = cached_condition["cache"]["dino_hidden_states_proj"]
@@ -1027,12 +1026,7 @@ class UNet2p5DConditionModel(torch.nn.Module):
             dino_hidden_states = None
 
 
-        # print('modules.py FORWARD 3')
-        # input()
-
         if self.use_ra:
-            # print('modules.py FORWARD 1-ra')
-            # input()
             if "condition_embed_dict" in cached_condition["cache"]:
                 condition_embed_dict = cached_condition["cache"]["condition_embed_dict"]
             else:
@@ -1089,6 +1083,10 @@ class UNet2p5DConditionModel(torch.nn.Module):
                         "condition_embed_dict": condition_embed_dict,
                     },
                 )
+                # After the reference pass, move the generated tensors to CPU before caching
+                for k in condition_embed_dict:
+                    if isinstance(condition_embed_dict[k], torch.Tensor):
+                        condition_embed_dict[k] = condition_embed_dict[k].cpu()
                 cached_condition["cache"]["condition_embed_dict"] = condition_embed_dict
                 if "ref_latents" in cached_condition:
                     del cached_condition["ref_latents"]
