@@ -1,0 +1,51 @@
+# api_spz/core/models_pydantic.py
+
+from enum import Enum
+from typing import Optional, Dict
+from fastapi import Form
+from pydantic import BaseModel, Field
+
+
+class TaskStatus(str, Enum):
+    PROCESSING = "PROCESSING"
+    COMPLETE = "COMPLETE"
+    FAILED = "FAILED"
+
+
+class GenerationArgForm:
+    def __init__(
+        self,
+        seed: int = Form(1234),
+        guidance_scale: float = Form(5.0),
+        num_inference_steps: int = Form(20),
+        octree_resolution: int = Form(256),
+        num_chunks: int = Form(80),
+        mesh_simplify_ratio: float = Form(0.1),
+        apply_texture: bool = Form(False),
+        texture_size: int = Form(2048),
+        output_format: str = Form("glb"),
+    ):
+        self.seed = seed
+        self.guidance_scale = guidance_scale
+        self.num_inference_steps = num_inference_steps
+        self.octree_resolution = octree_resolution
+        # The UI sends a small integer; we scale it up for the pipeline.
+        self.num_chunks = num_chunks * 1000
+        self.mesh_simplify_ratio = mesh_simplify_ratio
+        self.apply_texture = apply_texture
+        self.texture_size = texture_size
+        self.output_format = output_format
+
+
+class GenerationResponse(BaseModel):
+    status: TaskStatus
+    progress: int = 0
+    message: str = ""
+    model_url: Optional[str] = None
+
+
+class StatusResponse(BaseModel):
+    status: TaskStatus
+    progress: int
+    message: str
+    busy: bool
