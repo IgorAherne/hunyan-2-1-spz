@@ -189,3 +189,5 @@ hunyuan21_init_done.txt
 assets/debug_mesh.obj
 mr_combined.png
 temp.glb
+temp/current_generation/model.glb
+temp/current_generation/textured_mesh.mtl

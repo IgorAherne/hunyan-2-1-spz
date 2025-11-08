@@ -3,7 +3,7 @@
 
 from enum import Enum
 from typing import Optional, Dict
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 class TaskStatus(str, Enum):
@@ -22,11 +22,24 @@ class GenerationArgForm(BaseModel):
     num_inference_steps: int = 20
     octree_resolution: int = 256
     num_chunks: int = 80
+    apply_texture: bool = False,
     mesh_simplify: float = 10.0
-    apply_texture: bool = False
-    texture_size: int = 2048
+    texture_size: int = 786
     num_view_chunks: int = 3 # for controlling texture generation view chunking
     output_format: str = "glb"
+
+    @model_validator(mode='before')
+    @classmethod
+    def cast_int_fields(cls, data):
+        """Pre-processes incoming data to cast float-like ints to pure ints before validation."""
+        int_fields = ["num_inference_steps", "octree_resolution", "num_chunks", "texture_size", "num_view_chunks", "seed"]
+        for field in int_fields:
+            if field in data and data[field] is not None:
+                try:
+                    data[field] = int(data[field])
+                except (ValueError, TypeError):
+                    pass # Let the standard Pydantic validation handle the error if casting fails
+        return data
 
 
 
