@@ -104,13 +104,12 @@ def _blocking_full_generation_task(pil_images: List[Image.Image], arg: Generatio
             
             output_textured_obj_path = file_manager.get_temp_path("textured_mesh.obj")
             try:
-                # The `use_remesh` parameter controls the internal remesher.
                 texture_pipeline(
                     mesh_path=str(temp_obj_path), 
                     image_path=pil_images[0],
                     output_mesh_path=str(output_textured_obj_path), 
-                    save_glb=False,
-                    use_remesh=arg.mesh_simplify<100
+                    save_glb=True,
+                    use_remesh=False,# don't use internal remesheer, we already used one earlier, during post-process.
                 )
                 mesh = trimesh.load(str(output_textured_obj_path), force="mesh")
             finally:
