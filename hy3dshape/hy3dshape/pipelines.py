@@ -262,10 +262,19 @@ class Hunyuan3DDiTPipeline:
         """Frees up memory by deleting models and clearing cache."""
         if hasattr(self, 'vae'):
             del self.vae
+            self.vae = None
         if hasattr(self, 'model'):
             del self.model
+            self.model = None
         if hasattr(self, 'conditioner'):
             del self.conditioner
+            self.conditioner = None
+        if hasattr(self, 'scheduler'):
+            del self.scheduler
+            self.scheduler = None
+        if hasattr(self, 'image_processor'):
+            del self.image_processor
+            self.image_processor = None
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
