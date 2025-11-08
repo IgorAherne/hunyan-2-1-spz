@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api_spz.routes.generation import router as generation_router
 from api_spz.core.state_manage import state
 
-# --- Setup Logging ---
+# Setup Logging
 os.makedirs("temp", exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
@@ -33,16 +33,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger("hunyuan3d_api")
 
-# --- System Info ---
+# System Info
 print(
     f"\n[System Info] Python: {platform.python_version():<8} | "
     f"PyTorch: {torch.__version__:<8} | "
     f"CUDA: {'not available' if not torch.cuda.is_available() else torch.version.cuda}\n"
 )
 
-# --- Argument Parsing ---
+# Argument Parsing
 parser = argparse.ArgumentParser(description="Run Hunyuan3D-StableProjectorz API server")
-parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind the server to")
+parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind the server to")
 parser.add_argument("--port", type=int, default=7960, help="Port to bind the server to")
 parser.add_argument("--model_path", type=str, default='tencent/Hunyuan3D-2.1', help="Hunyuan3D model path")
 parser.add_argument("--subfolder", type=str, default='hunyuan3d-dit-v2-1', help="Model subfolder")
@@ -50,13 +50,13 @@ parser.add_argument("--device", type=str, default=None, help="Device to use ('cu
 parser.add_argument("--enable_flashvdm", action='store_true', default=True, help="Enable FlashVDM acceleration")
 args, _ = parser.parse_known_args()
 
-# --- Startup Info ---
+# Startup Info
 print("\n" + "="*50)
 print("Hunyuan3D-StableProjectorz API Server is starting...")
 print("If it's the first time, models will be downloaded. This may take a while.")
 print("="*50 + "\n")
 
-# --- FastAPI Lifespan Manager ---
+# FastAPI Lifespan Manager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Initialize models and resources
@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
     # Shutdown: Clean up (if needed)
     logger.info("Server shutting down.")
 
-# --- FastAPI App Initialization ---
+# FastAPI App Initialization
 app = FastAPI(
     title="Hunyuan3D-StableProjectorz API",
     version="2.1.0",

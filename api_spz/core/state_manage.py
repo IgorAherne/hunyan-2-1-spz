@@ -4,6 +4,8 @@ import logging
 import torch
 import trimesh
 from pathlib import Path
+from multiprocessing import Process, Queue
+import time
 
 from hy3dshape import (
     Hunyuan3DDiTFlowMatchingPipeline,
@@ -12,6 +14,8 @@ from hy3dshape import (
     FaceReducer,
 )
 from hy3dshape.rembg import BackgroundRemover
+from hy3dshape.pipelines import export_to_trimesh
+
 
 logger = logging.getLogger("hunyuan3d_api")
 
@@ -76,7 +80,7 @@ class HunyuanState:
             shape_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
                 args_dict['model_path'],
                 subfolder=args_dict['subfolder'],
-                use_safetensors=True,
+                use_safetensors=False,
                 device=args_dict['device'],
                 dtype=torch.float16,
             )
@@ -121,6 +125,26 @@ class HunyuanState:
                 print("Worker Process: Closing queue.")
                 queue.close()
                 queue.join_thread()
+
+    def execute_shape_generation(self, args_dict, progress_callback=None):
+        """
+        Executes the shape generation in a separate process and returns the result.
+        This method is blocking.
+        """
+        # The fake progress loop has been removed. The main worker thread
+        # provides more accurate progress updates between major stages.
+        queue = Queue()
+        process = Process(target=self.run_shape_generation_worker, args=(queue, args_dict))
+        process.start()
+        result = queue.get() # This blocks until the worker process is done.
+        process.join()
+
+        if not result or result[0] == 'error':
+            raise Exception(f"Shape generation failed in worker: {result[1] if result else 'No result'}")
+
+        _, mesh_data, _ = result
+        mesh = trimesh.Trimesh(vertices=mesh_data[0], faces=mesh_data[1])
+        return mesh
 
 # Global state instance
 state = HunyuanState()

@@ -1,6 +1,10 @@
+# api_spz/core/files_manage.py
 import os
 from pathlib import Path
 from api_spz.core.state_manage import state
+import logging
+
+logger = logging.getLogger("hunyuan3d_api")
 
 class FileManager:
     def __init__(self):
@@ -11,21 +15,32 @@ class FileManager:
         self.generation_path.mkdir(parents=True, exist_ok=True)
 
     def get_temp_path(self, filename: str) -> Path:
-        """Returns the path for a single file (e.g. 'input.png', 'preview_gaussian.mp4')."""
+        """Returns the path for a single file (e.g. 'input.png', 'model.glb')."""
         return self.generation_path / filename
 
-    def cleanup_generation_files(self, keep_videos: bool = False, keep_model: bool = False):
-        """Clean up files from the 'current_generation' folder."""
+    def clear_current_generation_folder(self):
+        """Deletes all files in the current generation directory."""
+        logger.info("Clearing current generation folder...")
         try:
             for file_name in os.listdir(self.generation_path):
-                # Decide which to remove
-                if not keep_videos and file_name.startswith("preview_"):
+                file_path = self.get_temp_path(file_name)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+        except Exception as e:
+            logger.error(f"Error clearing generation folder: {e}")
+
+    def cleanup_intermediate_files(self, keep_model: bool = False):
+        """Clean up intermediate files, optionally keeping the final model."""
+        logger.info(f"Cleaning up intermediate files. Keep model: {keep_model}")
+        try:
+            for file_name in os.listdir(self.generation_path):
+                # Always delete intermediate obj files, jpgs, etc.
+                if file_name.endswith((".obj", ".jpg", ".png")) and "model." not in file_name:
                     os.remove(self.get_temp_path(file_name))
-                elif not keep_model and file_name.startswith("model"):
-                    os.remove(self.get_temp_path(file_name))
-                elif file_name == "input.png":
+                # Delete final model only if not requested to keep
+                elif not keep_model and (file_name.startswith("model.")):
                     os.remove(self.get_temp_path(file_name))
         except Exception as e:
-            print(f"Error cleaning up generation files: {e}")
+            logger.error(f"Error during intermediate file cleanup: {e}")
 
 file_manager = FileManager()
