@@ -60,6 +60,13 @@ class multiviewDiffusionNet:
         unet_path = os.path.join(model_path, "unet")
         unet = UNet2p5DConditionModel.from_pretrained(unet_path, torch_dtype=torch.float16)
         
+        # This is the correct place to compile the UNet models.
+        # We compile the underlying modules within the custom wrapper.
+        print("Compiling UNet models for acceleration...")
+        unet.unet = torch.compile(unet.unet)
+        if hasattr(unet, "unet_dual") and unet.unet_dual is not None:
+            unet.unet_dual = torch.compile(unet.unet_dual)
+
         feature_extractor = CLIPImageProcessor.from_pretrained(model_path, subfolder="feature_extractor")
         scheduler = EulerAncestralDiscreteScheduler.from_pretrained(model_path, subfolder="scheduler")
 
@@ -70,6 +77,7 @@ class multiviewDiffusionNet:
             unet=unet,
             scheduler=scheduler,
             feature_extractor=feature_extractor,
+            use_torch_compile=True, 
         )
 
         pipeline.scheduler = UniPCMultistepScheduler.from_config(pipeline.scheduler.config, timestep_spacing="trailing")
@@ -122,13 +130,14 @@ class multiviewDiffusionNet:
             torch.cuda.empty_cache()
 
     @torch.no_grad()
-    def __call__(self, images, conditions, prompt=None, custom_view_size=None, resize_input=False, cache=None):
+    def __call__(self, images, conditions, prompt=None, custom_view_size=None, resize_input=False, cache=None, num_inference_steps=None):
         pils = self.forward_one(
-            images, conditions, prompt=prompt, custom_view_size=custom_view_size, resize_input=resize_input, cache=cache
+            images, conditions, prompt=prompt, custom_view_size=custom_view_size, resize_input=resize_input, cache=cache,
+            num_inference_steps=num_inference_steps
         )
         return pils
 
-    def forward_one(self, input_images, control_images, prompt=None, custom_view_size=None, resize_input=False, cache=None):
+    def forward_one(self, input_images, control_images, prompt=None, custom_view_size=None, resize_input=False, cache=None, num_inference_steps=None):
         self.seed_everything(0)
         custom_view_size = custom_view_size if custom_view_size is not None else self.pipeline.view_size
         if not isinstance(input_images, List):
@@ -188,10 +197,13 @@ class multiviewDiffusionNet:
             "DDIMScheduler": 50,
             "ShiftSNRScheduler": 15,
         }
+        # Use the passed num_inference_steps only if it's provided (for the warm-up).
+        # Otherwise, fall back to the scheduler-specific dictionary for the main run.
+        num_inference_steps = num_inference_steps if num_inference_steps is not None else infer_steps_dict[self.pipeline.scheduler.__class__.__name__]
 
         mvd_image = self.pipeline(
             input_images[0:1],
-            num_inference_steps=infer_steps_dict[self.pipeline.scheduler.__class__.__name__],
+            num_inference_steps=num_inference_steps,
             prompt=prompt,
             sync_condition=sync_condition,
             guidance_scale=3.0,

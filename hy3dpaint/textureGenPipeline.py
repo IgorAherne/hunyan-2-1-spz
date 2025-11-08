@@ -78,6 +78,7 @@ class Hunyuan3DPaintPipeline:
     def __init__(self, config=None) -> None:
         self.config = config if config is not None else Hunyuan3DPaintConfig()
         self.models = {} # Initialize empty models dict
+        self.is_compiled = False # Add this flag to track compilation status
         self.stats_logs = {}
         self.render = MeshRender(
             default_resolution=self.config.render_size,
@@ -95,7 +96,10 @@ class Hunyuan3DPaintPipeline:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             if model_name == "super_model":
-                self.models[model_name] = imageSuperNet(self.config)
+                super_model_net = imageSuperNet(self.config)
+                # Apply torch.compile to the underlying RRDBNet model within the RealESRGANer
+                super_model_net.upsampler.model = torch.compile(super_model_net.upsampler.model)
+                self.models[model_name] = super_model_net
             elif model_name == "multiview_model":
                 # Load multiview model (handles Bfloat16 and CPU offloading internally)
                 self.models[model_name] = multiviewDiffusionNet(self.config)
@@ -125,9 +129,58 @@ class Hunyuan3DPaintPipeline:
             torch.cuda.empty_cache()
         print("Hunyuan3DPaintPipeline memory freed.")
 
+
+    def _jit_compile_warmup(self):
+        """
+        Performs a one-time, low-overhead run to trigger torch.compile JIT compilation.
+        This avoids a long pause on the first real generation. Caches the result on disk.
+        """
+        if self.is_compiled:
+            return
+
+        print("[INFO] Performing one-time JIT compilation warm-up. This may take a moment...")
+        try:
+            # Create minimal dummy inputs for the fastest possible run
+            warmup_size = 64
+            dummy_style_image = [Image.new('RGB', (warmup_size, warmup_size), 'white')]
+            dummy_conditions = [Image.new('RGB', (warmup_size, warmup_size), 'white')] * 2  # Normal + Position
+
+            # Execute a single pass with 1 view and 1 step to trigger compilation
+            _ = self.models["multiview_model"](
+                dummy_style_image,
+                dummy_conditions,
+                prompt="warmup",
+                custom_view_size=warmup_size,
+                resize_input=True,
+                num_inference_steps=1  # CRITICAL: Run only one step
+            )
+            # If the warm-up was successful, create the sentinel file (to prevent re-compiles if server restarts)
+            if self.sentinel_path:
+                with open(self.sentinel_path, 'w') as f:
+                    pass  # Create an empty file to mark success
+                print(f"[INFO] Sentinel file created at {self.sentinel_path}")
+
+            print("[INFO] JIT warm-up complete. Main generation will now proceed.")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"[WARNING] JIT warm-up failed: {e}. Proceeding without compilation.")
+        finally:
+            self.is_compiled = True  # Mark as compiled for this session to prevent re-running
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+
     @torch.no_grad()
     def __call__(self, mesh_path=None, image_path=None, output_mesh_path=None, use_remesh=True, save_glb=True):
         """Generate texture for 3D mesh using multiview diffusion"""
+
+         # --- One-Time JIT Compilation Warm-up ---
+        self.load_model("multiview_model") # Ensure model is loaded before warm-up
+        self._jit_compile_warmup()
+        # --- End of Warm-up ---
+
         # Ensure image_prompt is a list
         if isinstance(image_path, str):
             image_prompt = Image.open(image_path)
@@ -204,14 +257,14 @@ class Hunyuan3DPaintPipeline:
 
             print(f"Processing chunk {i//chunk_size + 1}/{(num_views + chunk_size - 1)//chunk_size} with {len(chunk_normal_maps)} views...")
 
-            # Call the model with the smaller chunk
+            
             chunk_multiviews_pbr = self.models["multiview_model"](
                 image_style,
                 chunk_normal_maps + chunk_position_maps,
                 prompt=image_caption,
-                custom_view_size=self.config.resolution,
+                custom_view_size=self.config.resolution,# not processing all the views at once
                 resize_input=True,
-                cache=persistent_cache # Pass the persistent cache
+                cache=persistent_cache
             )
             
             # Append results from the chunk

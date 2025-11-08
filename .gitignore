@@ -191,3 +191,6 @@ mr_combined.png
 temp.glb
 temp/current_generation/model.glb
 temp/current_generation/textured_mesh.mtl
+/temp
+temp.glb
+mr_combined.png

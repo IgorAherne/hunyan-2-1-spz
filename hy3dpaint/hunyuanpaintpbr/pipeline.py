@@ -96,7 +96,6 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
         use_torch_compile=False,
     ):
         DiffusionPipeline.__init__(self)
-
         safety_checker = None
         self.register_modules(
             vae=torch.compile(vae) if use_torch_compile else vae,
@@ -112,7 +111,7 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
 
         if isinstance(self.unet, UNet2DConditionModel):
-            self.unet = UNet2p5DConditionModel(self.unet, None, self.scheduler)
+             self.unet = UNet2p5DConditionModel(self.unet, None, self.scheduler)
 
     def eval(self):
         self.unet.eval()

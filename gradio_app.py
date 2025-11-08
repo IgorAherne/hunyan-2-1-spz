@@ -20,6 +20,15 @@ import sys
 sys.path.insert(0, './hy3dshape')
 sys.path.insert(0, './hy3dpaint')
 
+# Set the torch.compile cache directory *before* importing torch, 
+# using the modern Inductor environment variables.
+import os
+cache_dir = os.path.join(os.getcwd(), "temp", "torch_compile_cache")
+os.makedirs(cache_dir, exist_ok=True)
+os.environ['TORCHINDUCTOR_FX_GRAPH_CACHE'] = '1'
+os.environ['TORCHINDUCTOR_CACHE_DIR'] = cache_dir
+print(f"[INFO] Persistent torch.compile disk cache enabled at: {os.path.abspath(cache_dir)}")
+
 
 try:
     from torchvision_fix import apply_fix
@@ -30,7 +39,6 @@ except Exception as e:
     print(f"Warning: Failed to apply torchvision fix: {e}")
 
 
-import os
 import random
 import shutil
 import subprocess
@@ -408,7 +416,7 @@ def generation_all(
 
     # Load, run, and unload texture pipeline
     print("Loading texture generation pipeline...")
-    conf = Hunyuan3DPaintConfig(max_num_view=8, resolution=768, view_chunk_size=args.view_chunk_size)
+    conf = Hunyuan3DPaintConfig(max_num_view=8, resolution=786)#view_chunk_size=args.view_chunk_size)
     conf.realesrgan_ckpt_path = "hy3dpaint/ckpt/RealESRGAN_x4plus.pth"
     conf.multiview_cfg_path = "hy3dpaint/cfgs/hunyuan-paint-pbr.yaml"
     conf.custom_pipeline = "hy3dpaint/hunyuanpaintpbr"
@@ -837,6 +845,7 @@ if __name__ == '__main__':
     parser.add_argument('--enable_flashvdm', action='store_true')
     parser.add_argument('--compile', action='store_true')
     parser.add_argument('--view_chunk_size', type=int, default=3, help="Number of views to process in a single batch for texture generation. Set to 0 to disable chunking.")
+    parser.add_argument('--enable_disk_cache', action='store_true', help="Enable persistent, on-disk caching for torch.compile.")
     args = parser.parse_args()
     
     DTYPE = torch.float16

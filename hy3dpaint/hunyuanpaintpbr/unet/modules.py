@@ -1108,14 +1108,9 @@ class UNet2p5DConditionModel(torch.nn.Module):
         else:
             condition_embed_dict = None
 
-        # print('modules.py FORWARD 4')
-        # input()
-
         mva_scale = cached_condition.get("mva_scale", 1.0)
         ref_scale = cached_condition.get("ref_scale", 1.0)
 
-        # print('modules.py FORWARD 5')
-        # input()
         return self.unet(
             sample,
             timestep,
