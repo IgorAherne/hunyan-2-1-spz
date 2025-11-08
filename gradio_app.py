@@ -280,7 +280,7 @@ def run_shape_generation_in_process(queue, args_dict):
         traceback.print_exc()
         queue.put(('error', str(e)))
     finally:
-        # --- FIX: Explicitly close the queue to prevent deadlocks on exit ---
+        # FIX: Explicitly close the queue to prevent deadlocks on exit
         # This ensures all data is flushed before the process tries to terminate its CUDA context.
         print("Worker Process: Closing queue.")
         queue.close()
@@ -306,9 +306,9 @@ def generation_all(
     start_time_0 = time.time()
     time_meta = {}
 
-    # --- Part 1: Get the initial mesh ---
+    # Part 1: Get the initial mesh
     if DEBUG_SKIP_SHAPE_GENERATION:
-        print("\n--- DEBUG MODE: Skipping Shape Generation ---\n")
+        print("\n--- DEBUG MODE: Skipping Shape Generation\n")
         if image is None:
             raise gr.Error("An image prompt is required to test texturing directly in debug mode.")
 
@@ -376,7 +376,7 @@ def generation_all(
         start_shape_gen = time.time()
         process.start()
         
-        # --- FIX: Read from the queue BEFORE joining the process to prevent deadlock ---
+        # FIX: Read from the queue BEFORE joining the process to prevent deadlock
         result = queue.get() # This will block until the worker puts the result in the queue
         process.join() # Now, wait for the (now unblocked) process to terminate
 
@@ -397,7 +397,7 @@ def generation_all(
         stats = stats_from_worker
         stats['time'] = time_meta
 
-    # --- Part 2: Common Mesh Post-Processing ---
+    # Part 2: Common Mesh Post-Processing
     path = export_mesh(mesh, save_folder, textured=False, type='obj')
     print(f"Exported untextured mesh to {path}")
 
@@ -509,7 +509,7 @@ def shape_generation(
     print("Main Process: Starting shape generation worker...")
     process.start()
     
-    # --- FIX: Read from the queue BEFORE joining the process to prevent deadlock ---
+    # FIX: Read from the queue BEFORE joining the process to prevent deadlock
     result = queue.get() # This will block until the worker puts the result in the queue
     process.join() # Now, wait for the (now unblocked) process to terminate
     
@@ -927,7 +927,7 @@ if __name__ == '__main__':
     app.mount("/static", StaticFiles(directory=static_dir, html=True), name="static")
     shutil.copytree('./assets/env_maps', os.path.join(static_dir, 'env_maps'), dirs_exist_ok=True)
 
-    # --- FIX: Set the start method to 'spawn' for CUDA safety ---
+    # FIX: Set the start method to 'spawn' for CUDA safety
     # This must be done once, at the very beginning of the main execution block.
     try:
         mp.set_start_method('spawn', force=True)
