@@ -59,13 +59,6 @@ class multiviewDiffusionNet:
         # Use the custom UNet's from_pretrained method to load the model with the correct architecture.
         unet_path = os.path.join(model_path, "unet")
         unet = UNet2p5DConditionModel.from_pretrained(unet_path, torch_dtype=torch.float16)
-        
-        # This is the correct place to compile the UNet models.
-        # We compile the underlying modules within the custom wrapper.
-        print("Compiling UNet models for acceleration...")
-        unet.unet = torch.compile(unet.unet)
-        if hasattr(unet, "unet_dual") and unet.unet_dual is not None:
-            unet.unet_dual = torch.compile(unet.unet_dual)
 
         feature_extractor = CLIPImageProcessor.from_pretrained(model_path, subfolder="feature_extractor")
         scheduler = EulerAncestralDiscreteScheduler.from_pretrained(model_path, subfolder="scheduler")

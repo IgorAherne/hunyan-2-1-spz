@@ -140,55 +140,9 @@ class Hunyuan3DPaintPipeline:
         print("Hunyuan3DPaintPipeline memory freed.")
 
 
-    def _jit_compile_warmup(self):
-        """
-        Performs a one-time, low-overhead run to trigger torch.compile JIT compilation.
-        This avoids a long pause on the first real generation. Caches the result on disk.
-        """
-        if self.is_compiled:
-            return
-
-        print("[INFO] Performing one-time JIT compilation warm-up. This may take a moment...")
-        try:
-            # Create minimal dummy inputs for the fastest possible run
-            warmup_size = 64
-            dummy_style_image = [Image.new('RGB', (warmup_size, warmup_size), 'white')]
-            dummy_conditions = [Image.new('RGB', (warmup_size, warmup_size), 'white')] * 2  # Normal + Position
-
-            # Execute a single pass with 1 view and 1 step to trigger compilation
-            _ = self.models["multiview_model"](
-                dummy_style_image,
-                dummy_conditions,
-                prompt="warmup",
-                custom_view_size=warmup_size,
-                resize_input=True,
-                num_inference_steps=1
-            )
-            # If the warm-up was successful, create the sentinel file (to prevent re-compiles if server restarts)
-            with open(self.sentinel_path, 'w') as f:
-                pass  # Create an empty file to mark success
-            print(f"[INFO] Sentinel file created at {self.sentinel_path}")
-
-            print("[INFO] JIT warm-up complete. Main generation will now proceed.")
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            print(f"[WARNING] JIT warm-up failed: {e}. Proceeding without compilation.")
-        finally:
-            self.is_compiled = True  # Mark as compiled for this session to prevent re-running
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
-
     @torch.no_grad()
     def __call__(self, mesh_path=None, image_path=None, output_mesh_path=None, use_remesh=True, save_glb=True):
         """Generate texture for 3D mesh using multiview diffusion"""
-
-         # --- One-Time JIT Compilation Warm-up ---
-        self.load_model("multiview_model") # Ensure model is loaded before warm-up
-        self._jit_compile_warmup()
-        # --- End of Warm-up ---
 
         # Ensure image_prompt is a list
         if isinstance(image_path, str):

@@ -78,33 +78,34 @@ class ViewProcessor:
             is_selected[idx] = True
             total_viewed_tri_idxs.update(viewed_tri_idxs[idx])
 
-        total_viewed_area = face_area_ratios[list(total_viewed_tri_idxs)].sum()
-        for iter in range(max_selected_view_num - len(selected_view_weights)):
-            max_inc = 0
-            max_idx = -1
+        # total_viewed_area = face_area_ratios[list(total_viewed_tri_idxs)].sum()
+        # for iter in range(max_selected_view_num - len(selected_view_weights)):
+        #     max_inc = 0
+        #     max_idx = -1
 
-            for idx, (elev, azim, weight) in enumerate(
-                zip(candidate_camera_elevs, candidate_camera_azims, candidate_view_weights)
-            ):
-                if is_selected[idx]:
-                    continue
-                new_tri_idxs = viewed_tri_idxs[idx] - total_viewed_tri_idxs
-                new_inc_area = face_area_ratios[list(new_tri_idxs)].sum()
+        #     for idx, (elev, azim, weight) in enumerate(
+        #         zip(candidate_camera_elevs, candidate_camera_azims, candidate_view_weights)
+        #     ):
+        #         if is_selected[idx]:
+        #             continue
+        #         new_tri_idxs = viewed_tri_idxs[idx] - total_viewed_tri_idxs
+        #         new_inc_area = face_area_ratios[list(new_tri_idxs)].sum()
 
-                if new_inc_area > max_inc:
-                    max_inc = new_inc_area
-                    max_idx = idx
+        #         if new_inc_area > max_inc:
+        #             max_inc = new_inc_area
+        #             max_idx = idx
 
-            if max_inc > 0.01:
-                is_selected[max_idx] = True
-                selected_camera_elevs.append(candidate_camera_elevs[max_idx])
-                selected_camera_azims.append(candidate_camera_azims[max_idx])
-                selected_view_weights.append(candidate_view_weights[max_idx])
-                selected_alpha_maps.append(viewed_masks[max_idx])
-                total_viewed_tri_idxs = total_viewed_tri_idxs.union(viewed_tri_idxs[max_idx])
-                total_viewed_area += max_inc
-            else:
-                break
+        #     if max_inc > 0.01:
+        #         is_selected[max_idx] = True
+        #         selected_camera_elevs.append(candidate_camera_elevs[max_idx])
+        #         selected_camera_azims.append(candidate_camera_azims[max_idx])
+        #         selected_view_weights.append(candidate_view_weights[max_idx])
+        #         selected_alpha_maps.append(viewed_masks[max_idx])
+        #         total_viewed_tri_idxs = total_viewed_tri_idxs.union(viewed_tri_idxs[max_idx])
+        #         total_viewed_area += max_inc
+        #     else:
+        #         break
+        #MODIF
 
         self.render.set_default_render_resolution(original_resolution)
 
