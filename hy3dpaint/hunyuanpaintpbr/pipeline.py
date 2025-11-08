@@ -520,10 +520,7 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
         callback = kwargs.pop("callback", None)
         callback_steps = kwargs.pop("callback_steps", None)
 
-        cache = kwargs.pop("cache", None)
-        kwargs["cache"] = cache if cache is not None else {}
-
-        print("using cache")
+        kwargs["cache"] = {}
 
         if callback is not None:
             deprecate(

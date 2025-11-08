@@ -17,6 +17,7 @@
 import os
 import gc
 import torch
+import time
 import copy
 import trimesh
 import numpy as np
@@ -144,6 +145,9 @@ class Hunyuan3DPaintPipeline:
     def __call__(self, mesh_path=None, image_path=None, output_mesh_path=None, use_remesh=True, save_glb=True):
         """Generate texture for 3D mesh using multiview diffusion"""
 
+        total_start_time = time.time()
+        print("\n--- Starting Texture Generation Pipeline ---")
+
         # Ensure image_prompt is a list
         if isinstance(image_path, str):
             image_prompt = Image.open(image_path)
@@ -176,19 +180,23 @@ class Hunyuan3DPaintPipeline:
         self.render.load_mesh(mesh=mesh)
 
         ########### View Selection #########
+        time_marker = time.time()
         selected_camera_elevs, selected_camera_azims, selected_view_weights = self.view_processor.bake_view_selection(
             self.config.candidate_camera_elevs,
             self.config.candidate_camera_azims,
             self.config.candidate_view_weights,
             self.config.max_selected_view_num,
         )
+        print(f"[PROFILING] View Selection took: {time.time() - time_marker:.2f}s")
 
         print(f"Requested a maximum of {self.config.max_selected_view_num} views. bake_view_selection returned {len(selected_camera_elevs)} views.")
 
+        time_marker = time.time()
         normal_maps = self.view_processor.render_normal_multiview(
             selected_camera_elevs, selected_camera_azims, use_abs_coor=True
         )
         position_maps = self.view_processor.render_position_multiview(selected_camera_elevs, selected_camera_azims)
+        print(f"[PROFILING] Condition Map Rendering took: {time.time() - time_marker:.2f}s")
 
         ##########  Style  ###########
         image_caption = "high quality"
@@ -203,9 +211,9 @@ class Hunyuan3DPaintPipeline:
         image_style = [image.convert("RGB") for image in image_style]
 
         ###########  Multiview  ##########
-        # Load multiview model sequentially
         self.load_model("multiview_model")
         
+        time_marker = time.time()
         all_multiviews_pbr = {"albedo": [], "mr": []}
         num_views = len(selected_camera_elevs)
         chunk_size = self.config.view_chunk_size
@@ -240,6 +248,8 @@ class Hunyuan3DPaintPipeline:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
+        print(f"[PROFILING] Multiview Denoising (UNet) took: {time.time() - time_marker:.2f}s")
+
         multiviews_pbr = all_multiviews_pbr
         
         # Offload multiview model
@@ -254,15 +264,18 @@ class Hunyuan3DPaintPipeline:
 
         # Load super-resolution model sequentially
         self.load_model("super_model")
+        time_marker = time.time()
         for i in range(len(enhance_images["albedo"])):
             enhance_images["albedo"][i] = self.models["super_model"](enhance_images["albedo"][i])
             if "mr" in enhance_images:
                 enhance_images["mr"][i] = self.models["super_model"](enhance_images["mr"][i])
+        print(f"[PROFILING] Super-Resolution took: {time.time() - time_marker:.2f}s")
         
         # Offload super-resolution model
         self.offload_model("super_model")
 
         ###########  Bake  ##########
+        time_marker = time.time()
         # Ensure correct loop iteration count
         for i in range(len(enhance_images["albedo"])):
             enhance_images["albedo"][i] = enhance_images["albedo"][i].resize(
@@ -281,18 +294,23 @@ class Hunyuan3DPaintPipeline:
                 enhance_images["mr"], selected_camera_elevs, selected_camera_azims, selected_view_weights
             )
             mask_mr_np = (mask_mr.squeeze(-1).cpu().numpy() * 255).astype(np.uint8)
+        print(f"[PROFILING] Texture Baking took: {time.time() - time_marker:.2f}s")
 
         ##########  inpaint  ###########
+        time_marker = time.time()
         texture = self.view_processor.texture_inpaint(texture, mask_np)
         self.render.set_texture(texture, force_set=True)
         if "mr" in enhance_images:
             texture_mr = self.view_processor.texture_inpaint(texture_mr, mask_mr_np)
             self.render.set_texture_mr(texture_mr)
+        print(f"[PROFILING] Inpainting took: {time.time() - time_marker:.2f}s")
 
         self.render.save_mesh(output_mesh_path, downsample=True)
 
         if save_glb:
             convert_obj_to_glb(output_mesh_path, output_mesh_path.replace(".obj", ".glb"))
             output_glb_path = output_mesh_path.replace(".obj", ".glb")
+
+        print(f"--- Total Texture Generation Time: {time.time() - total_start_time:.2f}s ---")
 
         return output_mesh_path
