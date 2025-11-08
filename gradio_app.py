@@ -47,6 +47,8 @@ from fastapi.staticfiles import StaticFiles
 import uuid
 import numpy as np
 import gc
+from multiprocessing import Process, Queue
+import multiprocessing as mp
 
 from hy3dshape.utils import logger
 from hy3dpaint.convert_utils import create_glb_with_pbr_materials
@@ -226,118 +228,63 @@ def clear_gpu_memory():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-@spaces.GPU(duration=60)
-def _gen_shape(
-    i23d_pipeline,
-    caption=None,
-    image=None,
-    mv_image_front=None,
-    mv_image_back=None,
-    mv_image_left=None,
-    mv_image_right=None,
-    steps=50,
-    guidance_scale=7.5,
-    seed=1234,
-    octree_resolution=256,
-    check_box_rembg=False,
-    num_chunks=200000,
-    randomize_seed: bool = False,
-):
-    if not MV_MODE and image is None and caption is None:
-        raise gr.Error("Please provide either a caption or an image.")
-    if MV_MODE:
-        if mv_image_front is None and mv_image_back is None \
-            and mv_image_left is None and mv_image_right is None:
-            raise gr.Error("Please provide at least one view image.")
-        image = {}
-        if mv_image_front:
-            image['front'] = mv_image_front
-        if mv_image_back:
-            image['back'] = mv_image_back
-        if mv_image_left:
-            image['left'] = mv_image_left
-        if mv_image_right:
-            image['right'] = mv_image_right
 
-    seed = int(randomize_seed_fn(seed, randomize_seed))
+def run_shape_generation_in_process(queue, args_dict):
+    """
+    This function runs in a separate process to ensure all memory (RAM and VRAM)
+    is released upon completion.
+    """
+    try:
+        # Re-import and initialize everything within the new process
+        import torch
+        import trimesh
+        from hy3dshape import Hunyuan3DDiTFlowMatchingPipeline
+        from hy3dshape.pipelines import export_to_trimesh
 
-    octree_resolution = int(octree_resolution)
-    if caption: print('prompt is', caption)
-    save_folder = gen_save_folder()
-    stats = {
-        'model': {
-            'shapegen': f'{args.model_path}/{args.subfolder}',
-            'texgen': f'{args.texgen_model_path}',
-        },
-        'params': {
-            'caption': caption,
-            'steps': steps,
-            'guidance_scale': guidance_scale,
-            'seed': seed,
-            'octree_resolution': octree_resolution,
-            'check_box_rembg': check_box_rembg,
-            'num_chunks': num_chunks,
-        }
-    }
-    time_meta = {}
-
-    if image is None:
-        worker_to_use = None
-        # In low VRAM mode, t2i_worker is not pre-loaded. Load it on-demand.
-        if args.enable_t23d:
-            from hy3dgen.text2image import HunyuanDiTPipeline
-            print("Low VRAM mode: Loading T2I pipeline on-demand...")
-            worker_to_use = HunyuanDiTPipeline('Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled')
-        elif HAS_T2I:
-            worker_to_use = t2i_worker
+        print("Worker Process: Loading shape generation pipeline...")
+        shape_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
+            args_dict['model_path'], subfolder=args_dict['subfolder'], use_safetensors=False, 
+            device=args_dict['device'], dtype=torch.float16
+        )
+        if args_dict['enable_flashvdm']:
+            shape_pipeline.enable_flashvdm(mc_algo='mc' if args_dict['device'] in ['cpu', 'mps'] else args_dict['mc_algo'])
         
-        start_time = time.time()
-        if worker_to_use is not None:
-            try:
-                image = worker_to_use(caption)
-            except Exception as e:
-                raise gr.Error(f"Text-to-3D failed: {e}")
-        else:
-            raise gr.Error("Text-to-3D is disabled. Please enable it with `--enable_t23d`.")
+        generator = torch.Generator()
+        generator = generator.manual_seed(int(args_dict['seed']))
+        
+        # We ask for the raw mesh output here to avoid complex object serialization
+        outputs = shape_pipeline(
+            image=args_dict['image'],
+            num_inference_steps=args_dict['steps'],
+            guidance_scale=args_dict['guidance_scale'],
+            generator=generator,
+            octree_resolution=args_dict['octree_resolution'],
+            num_chunks=args_dict['num_chunks'],
+            output_type='mesh' # Ask for raw mesh, not trimesh
+        )
+        # Convert to trimesh inside the worker
+        mesh = export_to_trimesh(outputs)[0]
+        
+        stats = { 'number_of_faces': mesh.faces.shape[0], 'number_of_vertices': mesh.vertices.shape[0] }
 
-        # If we loaded a local T2I worker, free its memory now
-        if worker_to_use is not None:
-            del worker_to_use
-            clear_gpu_memory()
-            print("Unloaded T2I pipeline.")
+        print("Worker Process: Freeing shape generation pipeline memory...")
+        shape_pipeline.free_memory()
+        del shape_pipeline
+        
+        # Send simple, pickleable data (vertices and faces) instead of the complex Trimesh object
+        mesh_data = (mesh.vertices, mesh.faces)
+        queue.put(('success', mesh_data, stats))
 
-        time_meta['text2image'] = time.time() - start_time
-
-    # remove disk io to make responding faster, uncomment at your will.
-    # image.save(os.path.join(save_folder, 'input.png'))
-
-    # image to white model
-    start_time = time.time()
-
-    generator = torch.Generator()
-    generator = generator.manual_seed(int(seed))
-    outputs = i23d_pipeline(
-        image=image,
-        num_inference_steps=steps,
-        guidance_scale=guidance_scale,
-        generator=generator,
-        octree_resolution=octree_resolution,
-        num_chunks=num_chunks,
-        output_type='mesh'
-    )
-    time_meta['shape generation'] = time.time() - start_time
-    logger.info("---Shape generation takes %s seconds" % (time.time() - start_time))
-
-    tmp_start = time.time()
-    mesh = export_to_trimesh(outputs)[0]
-    time_meta['export to trimesh'] = time.time() - tmp_start
-
-    stats['number_of_faces'] = mesh.faces.shape[0]
-    stats['number_of_vertices'] = mesh.vertices.shape[0]
-
-    stats['time'] = time_meta
-    main_image = image if not MV_MODE else image['front']
-    return mesh, main_image, save_folder, stats, seed
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        queue.put(('error', str(e)))
+    finally:
+        # --- FIX: Explicitly close the queue to prevent deadlocks on exit ---
+        # This ensures all data is flushed before the process tries to terminate its CUDA context.
+        print("Worker Process: Closing queue.")
+        queue.close()
+        queue.join_thread()
 
 
 @spaces.GPU(duration=60)
@@ -357,10 +304,11 @@ def generation_all(
     randomize_seed: bool = False,
 ):
     start_time_0 = time.time()
+    time_meta = {}
 
-    # Part 1: Get the initial mesh
+    # --- Part 1: Get the initial mesh ---
     if DEBUG_SKIP_SHAPE_GENERATION:
-        print("\n--- DEBUG MODE: Skipping Shape Generation\n")
+        print("\n--- DEBUG MODE: Skipping Shape Generation ---\n")
         if image is None:
             raise gr.Error("An image prompt is required to test texturing directly in debug mode.")
 
@@ -373,25 +321,83 @@ def generation_all(
         stats = {'mode': 'texture_only_debug', 'debug_mesh': debug_mesh_path, 'time': {}}
         # Use the seed from the UI if available
         seed = int(randomize_seed_fn(seed, randomize_seed))
-    else:
-        # 1. Shape Generation
-        print("Loading shape generation pipeline...")
-        shape_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
-            args.model_path, subfolder=args.subfolder, use_safetensors=False, device=args.device, dtype=DTYPE
-        )
-        if args.enable_flashvdm:
-            shape_pipeline.enable_flashvdm(mc_algo='mc' if args.device in ['cpu', 'mps'] else args.mc_algo)
+    
+    else: # Always use the worker process for shape generation now
+        print("Spawning separate process for shape generation.")
         
-        mesh, image, save_folder, stats, seed = _gen_shape(
-            shape_pipeline, caption, image, mv_image_front, mv_image_back, mv_image_left, mv_image_right,
-            steps, guidance_scale, seed, octree_resolution, check_box_rembg, num_chunks, randomize_seed
-        )
-        print("Freeing shape generation pipeline memory...")
-        shape_pipeline.free_memory()
-        del shape_pipeline
-        clear_gpu_memory()
+        # Handle Multi-View image dictionary creation
+        image_for_worker = image
+        if MV_MODE:
+            if mv_image_front is None and mv_image_back is None and mv_image_left is None and mv_image_right is None:
+                raise gr.Error("Please provide at least one view image.")
+            image_for_worker = {}
+            if mv_image_front: image_for_worker['front'] = mv_image_front
+            if mv_image_back: image_for_worker['back'] = mv_image_back
+            if mv_image_left: image_for_worker['left'] = mv_image_left
+            if mv_image_right: image_for_worker['right'] = mv_image_right
+        
+        # Handle Text-to-Image generation in the main process
+        if image_for_worker is None and caption:
+            worker_to_use = None
+            if args.enable_t23d:
+                from hy3dgen.text2image import HunyuanDiTPipeline
+                print("Main Process: Loading T2I pipeline on-demand...")
+                worker_to_use = HunyuanDiTPipeline('Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled')
+            
+            start_t2i = time.time()
+            if worker_to_use is not None:
+                try:
+                    image_for_worker = worker_to_use(caption)
+                except Exception as e:
+                    raise gr.Error(f"Text-to-3D failed: {e}")
+                finally:
+                    if worker_to_use is not None:
+                        del worker_to_use
+                        clear_gpu_memory()
+            else:
+                 raise gr.Error("Text-to-3D is disabled. Please enable it with `--enable_t23d`.")
+            time_meta['text2image'] = time.time() - start_t2i
+        
+        # This image is used for both the worker and the subsequent texture pipeline
+        image = image_for_worker 
+        seed = int(randomize_seed_fn(seed, randomize_seed))
 
-    # Part 2: Common Mesh Post-Processing
+        args_dict = {
+            'model_path': args.model_path, 'subfolder': args.subfolder, 'device': args.device,
+            'enable_flashvdm': args.enable_flashvdm, 'mc_algo': args.mc_algo,
+            'image': image, 'steps': steps, 'guidance_scale': guidance_scale,
+            'seed': seed, 'octree_resolution': octree_resolution, 'num_chunks': num_chunks,
+        }
+        
+        queue = Queue()
+        process = Process(target=run_shape_generation_in_process, args=(queue, args_dict))
+        
+        print("Main Process: Starting shape generation worker...")
+        start_shape_gen = time.time()
+        process.start()
+        
+        # --- FIX: Read from the queue BEFORE joining the process to prevent deadlock ---
+        result = queue.get() # This will block until the worker puts the result in the queue
+        process.join() # Now, wait for the (now unblocked) process to terminate
+
+        time_meta['shape generation'] = time.time() - start_shape_gen
+        print("Main Process: Shape generation worker finished.")
+
+        if result is None:
+             raise gr.Error("Shape generation worker failed to return a result. Check console for errors.")
+        
+        if result[0] == 'error':
+            raise gr.Error(f"Shape generation failed in worker process: {result[1]}")
+        
+        _, mesh_data, stats_from_worker = result
+        mesh_vertices, mesh_faces = mesh_data
+        mesh = trimesh.Trimesh(vertices=mesh_vertices, faces=mesh_faces)
+        
+        save_folder = gen_save_folder()
+        stats = stats_from_worker
+        stats['time'] = time_meta
+
+    # --- Part 2: Common Mesh Post-Processing ---
     path = export_mesh(mesh, save_folder, textured=False, type='obj')
     print(f"Exported untextured mesh to {path}")
 
@@ -402,7 +408,7 @@ def generation_all(
 
     # Load, run, and unload texture pipeline
     print("Loading texture generation pipeline...")
-    conf = Hunyuan3DPaintConfig(max_num_view=8, resolution=768, view_chunk_size=args.view_chunk_size)
+    conf = Hunyuan3DPaintConfig(max_num_view=6, resolution=768, view_chunk_size=args.view_chunk_size)
     conf.realesrgan_ckpt_path = "hy3dpaint/ckpt/RealESRGAN_x4plus.pth"
     conf.multiview_cfg_path = "hy3dpaint/cfgs/hunyuan-paint-pbr.yaml"
     conf.custom_pipeline = "hy3dpaint/hunyuanpaintpbr"
@@ -436,6 +442,7 @@ def generation_all(
     )
 
 
+
 @spaces.GPU(duration=60)
 def shape_generation(
     caption=None,
@@ -454,25 +461,73 @@ def shape_generation(
 ):
     start_time_0 = time.time()
     
-    # load, run, and free the pipeline
-    print("Loading shape generation pipeline...")
-    shape_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
-        args.model_path, subfolder=args.subfolder, use_safetensors=False, device=args.device, dtype=DTYPE
-    )
-    if args.enable_flashvdm:
-        shape_pipeline.enable_flashvdm(mc_algo='mc' if args.device in ['cpu', 'mps'] else args.mc_algo)
+    print("Spawning separate process for shape generation.")
+    
+    # Handle Multi-View image dictionary creation
+    image_for_worker = image
+    if MV_MODE:
+        if mv_image_front is None and mv_image_back is None and mv_image_left is None and mv_image_right is None:
+            raise gr.Error("Please provide at least one view image.")
+        image_for_worker = {}
+        if mv_image_front: image_for_worker['front'] = mv_image_front
+        if mv_image_back: image_for_worker['back'] = mv_image_back
+        if mv_image_left: image_for_worker['left'] = mv_image_left
+        if mv_image_right: image_for_worker['right'] = mv_image_right
+
+    # Handle Text-to-Image generation in the main process
+    if image_for_worker is None and caption:
+        worker_to_use = None
+        if args.enable_t23d:
+            from hy3dgen.text2image import HunyuanDiTPipeline
+            print("Main Process: Loading T2I pipeline on-demand...")
+            worker_to_use = HunyuanDiTPipeline('Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled')
         
-    mesh, image, save_folder, stats, seed = _gen_shape(
-        shape_pipeline, caption, image, mv_image_front, mv_image_back, mv_image_left, mv_image_right,
-        steps, guidance_scale, seed, octree_resolution, check_box_rembg, num_chunks, randomize_seed
-    )
-    print("Freeing shape generation pipeline memory...")
-    shape_pipeline.free_memory()
-    del shape_pipeline
-    clear_gpu_memory()
+        if worker_to_use is not None:
+            try:
+                image_for_worker = worker_to_use(caption)
+            except Exception as e:
+                raise gr.Error(f"Text-to-3D failed: {e}")
+            finally:
+                if worker_to_use is not None:
+                    del worker_to_use
+                    clear_gpu_memory()
+        else:
+             raise gr.Error("Text-to-3D is disabled. Please enable it with `--enable_t23d`.")
+    
+    seed = int(randomize_seed_fn(seed, randomize_seed))
 
+    args_dict = {
+        'model_path': args.model_path, 'subfolder': args.subfolder, 'device': args.device,
+        'enable_flashvdm': args.enable_flashvdm, 'mc_algo': args.mc_algo,
+        'image': image_for_worker, 'steps': steps, 'guidance_scale': guidance_scale,
+        'seed': seed, 'octree_resolution': octree_resolution, 'num_chunks': num_chunks,
+    }
+    
+    queue = Queue()
+    process = Process(target=run_shape_generation_in_process, args=(queue, args_dict))
+    
+    print("Main Process: Starting shape generation worker...")
+    process.start()
+    
+    # --- FIX: Read from the queue BEFORE joining the process to prevent deadlock ---
+    result = queue.get() # This will block until the worker puts the result in the queue
+    process.join() # Now, wait for the (now unblocked) process to terminate
+    
+    print("Main Process: Shape generation worker finished.")
 
-    stats['time']['total'] = time.time() - start_time_0
+    if result is None:
+        raise gr.Error("Shape generation worker failed to return a result. Check console for errors.")
+
+    if result[0] == 'error':
+        raise gr.Error(f"Shape generation failed in worker process: {result[1]}")
+    
+    _, mesh_data, stats_from_worker = result
+    mesh_vertices, mesh_faces = mesh_data
+    mesh = trimesh.Trimesh(vertices=mesh_vertices, faces=mesh_faces)
+    
+    save_folder = gen_save_folder()
+    stats = stats_from_worker
+    stats['time'] = {'total': time.time() - start_time_0}
     mesh.metadata['extras'] = stats
 
     path = export_mesh(mesh, save_folder, textured=False)
@@ -872,7 +927,16 @@ if __name__ == '__main__':
     app.mount("/static", StaticFiles(directory=static_dir, html=True), name="static")
     shutil.copytree('./assets/env_maps', os.path.join(static_dir, 'env_maps'), dirs_exist_ok=True)
 
+    # --- FIX: Set the start method to 'spawn' for CUDA safety ---
+    # This must be done once, at the very beginning of the main execution block.
+    try:
+        mp.set_start_method('spawn', force=True)
+        print("Multiprocessing start method set to 'spawn'.")
+    except RuntimeError:
+        print("Multiprocessing start method already set.")
+
     torch.cuda.empty_cache()
+
     demo = build_app()
     app = gr.mount_gradio_app(app, demo, path="/")
     uvicorn.run(app, host=args.host, port=args.port)
