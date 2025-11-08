@@ -808,7 +808,6 @@ class Hunyuan3DDiTFlowMatchingPipeline(Hunyuan3DDiTPipeline):
         callback = kwargs.pop("callback", None)
         callback_steps = kwargs.pop("callback_steps", None)
 
-        print("2")
         self.set_surface_extractor(mc_algo)
 
         # Optimization: Offload VAE, which is only needed at the end.
