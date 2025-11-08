@@ -24,7 +24,7 @@ class GenerationArgForm(BaseModel):
     num_chunks: int = 80
     apply_texture: bool = False,
     mesh_simplify: float = 10.0
-    texture_size: int = 786
+    texture_size: int = 4096 #final texture size (will upscale up to here). Rendering will still be at 768 etc.
     num_view_chunks: int = 3 # for controlling texture generation view chunking
     output_format: str = "glb"
 

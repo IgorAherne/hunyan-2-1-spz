@@ -408,7 +408,7 @@ def generation_all(
 
     # Load, run, and unload texture pipeline
     print("Loading texture generation pipeline...")
-    conf = Hunyuan3DPaintConfig(max_num_view=6, resolution=768, view_chunk_size=args.view_chunk_size)
+    conf = Hunyuan3DPaintConfig(max_num_view=8, resolution=768, view_chunk_size=args.view_chunk_size)
     conf.realesrgan_ckpt_path = "hy3dpaint/ckpt/RealESRGAN_x4plus.pth"
     conf.multiview_cfg_path = "hy3dpaint/cfgs/hunyuan-paint-pbr.yaml"
     conf.custom_pipeline = "hy3dpaint/hunyuanpaintpbr"

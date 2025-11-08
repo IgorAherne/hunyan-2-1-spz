@@ -8,6 +8,7 @@ import asyncio
 import io
 import base64
 import trimesh
+from trimesh.visual import material
 from fastapi import APIRouter, File, Response, UploadFile, Form, HTTPException, Depends
 from fastapi.responses import FileResponse
 from PIL import Image
@@ -108,10 +109,30 @@ def _blocking_full_generation_task(pil_images: List[Image.Image], arg: Generatio
                     mesh_path=str(temp_obj_path), 
                     image_path=pil_images[0],
                     output_mesh_path=str(output_textured_obj_path), 
-                    save_glb=True,
-                    use_remesh=False,# don't use internal remesheer, we already used one earlier, during post-process.
+                    save_glb=False,
+                    use_remesh=False
                 )
+                # After texturing, create a GLB with ONLY the albedo texture for StableProjectorz.
+                # The other maps (metallic, roughness) remain on disk but are not included in the download.
                 mesh = trimesh.load(str(output_textured_obj_path), force="mesh")
+                
+                # Manually load just the albedo texture
+                albedo_path = output_textured_obj_path.with_suffix(".jpg")
+                if albedo_path.exists():
+                    albedo_image = Image.open(albedo_path)
+                    
+                    # Create a simple PBR material that only uses the albedo texture
+                    albedo_material = material.PBRMaterial(baseColorTexture=albedo_image)
+                    
+                    # Create a new texture visual for the mesh, assigning our albedo-only material
+                    texture_visual = trimesh.visual.TextureVisuals(
+                        uv=mesh.visual.uv,
+                        material=albedo_material
+                    )
+                    mesh.visual = texture_visual
+                else:
+                    logger.warning(f"Albedo texture not found at {albedo_path}, exporting GLB without texture.")
+
             finally:
                 texture_pipeline.free_memory()
             update_current_generation(progress=95, message="Texture applied.")
