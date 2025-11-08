@@ -39,7 +39,7 @@ diffusers_logging.set_verbosity(50)
 
 
 class Hunyuan3DPaintConfig:
-    def __init__(self, max_num_view, resolution, view_chunk_size=6):
+    def __init__(self, max_num_view=8, resolution=768, view_chunk_size=8):
         self.device = "cuda"
 
         self.multiview_cfg_path = "hy3dpaint/cfgs/hunyuan-paint-pbr.yaml"
@@ -166,6 +166,8 @@ class Hunyuan3DPaintPipeline:
             self.config.candidate_view_weights,
             self.config.max_selected_view_num,
         )
+
+        print(f"DEBUG: Requested a maximum of {self.config.max_selected_view_num} views. bake_view_selection returned {len(selected_camera_elevs)} views.")
 
         normal_maps = self.view_processor.render_normal_multiview(
             selected_camera_elevs, selected_camera_azims, use_abs_coor=True

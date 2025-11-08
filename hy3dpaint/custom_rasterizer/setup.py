@@ -3,7 +3,7 @@ import torch
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 import os
 
-# --- Build Configuration ---
+# Build Configuration
 
 # Base C++ compiler flags for Windows
 cxx_flags = ['/std:c++17', '/bigobj']
@@ -32,7 +32,7 @@ nvcc_flags.extend(arch_flags)
 # This mirrors the architectures we are building for.
 os.environ['TORCH_CUDA_ARCH_LIST'] = '6.1;7.5;8.6;8.9;9.0'
 
-# --- CUDA Extension Definition ---
+# CUDA Extension Definition
 
 custom_rasterizer_module = CUDAExtension(
     "custom_rasterizer_kernel",
@@ -44,7 +44,7 @@ custom_rasterizer_module = CUDAExtension(
     extra_compile_args={'cxx': cxx_flags, 'nvcc': nvcc_flags}
 )
 
-# --- Setup Call ---
+# Setup Call
 
 setup(
     packages=find_packages(),

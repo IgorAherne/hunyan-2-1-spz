@@ -54,7 +54,7 @@ from hy3dpaint.convert_utils import create_glb_with_pbr_materials
 
 # Set to True to skip shape generation and use a placeholder mesh for testing texturing.
 # You must provide a mesh at `assets/debug_mesh.obj` for this to work.
-DEBUG_SKIP_SHAPE_GENERATION = True #MODIF
+DEBUG_SKIP_SHAPE_GENERATION = False #MODIF
 
 MAX_SEED = 1e7
 ENV = "Local" # "Huggingface"
@@ -326,7 +326,7 @@ def _gen_shape(
         output_type='mesh'
     )
     time_meta['shape generation'] = time.time() - start_time
-    logger.info("---Shape generation takes %s seconds ---" % (time.time() - start_time))
+    logger.info("---Shape generation takes %s seconds" % (time.time() - start_time))
 
     tmp_start = time.time()
     mesh = export_to_trimesh(outputs)[0]
@@ -358,9 +358,9 @@ def generation_all(
 ):
     start_time_0 = time.time()
 
-    # --- Part 1: Get the initial mesh ---
+    # Part 1: Get the initial mesh
     if DEBUG_SKIP_SHAPE_GENERATION:
-        print("\n--- DEBUG MODE: Skipping Shape Generation ---\n")
+        print("\n--- DEBUG MODE: Skipping Shape Generation\n")
         if image is None:
             raise gr.Error("An image prompt is required to test texturing directly in debug mode.")
 
@@ -391,7 +391,7 @@ def generation_all(
         del shape_pipeline
         clear_gpu_memory()
 
-    # --- Part 2: Common Mesh Post-Processing ---
+    # Part 2: Common Mesh Post-Processing
     path = export_mesh(mesh, save_folder, textured=False, type='obj')
     print(f"Exported untextured mesh to {path}")
 
@@ -418,7 +418,7 @@ def generation_all(
     del texture_pipeline
     clear_gpu_memory()
   
-    # --- Part 4: Common final steps ---
+    # Part 4: Common final steps
     tmp_time = time.time()
     glb_path_textured = os.path.join(save_folder, 'textured_mesh.glb')
     quick_convert_with_obj2gltf(path_textured, glb_path_textured)

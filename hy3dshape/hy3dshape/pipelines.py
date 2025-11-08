@@ -246,8 +246,15 @@ class Hunyuan3DDiTPipeline:
         self.conditioner = conditioner
         self.image_processor = image_processor
         self.kwargs = kwargs
-        self.to(device, dtype)
-        # Ensure self.device and self.dtype are set correctly
+        # self.to(device, dtype) # Commented out = to be deleted
+        
+        # We still want to set the dtype, but we'll keep the models on the CPU for now.
+        # The __call__ method will handle moving them to the correct device.
+        self.vae.to(dtype=dtype)
+        self.model.to(dtype=dtype)
+        self.conditioner.to(dtype=dtype)
+
+        # Ensure self.device and self.dtype are set correctly for later use
         self.device = torch.device(device)
         self.dtype = dtype
 
@@ -616,6 +623,9 @@ class Hunyuan3DDiTPipeline:
 
         self.set_surface_extractor(mc_algo)
 
+        # Optimization: Offload VAE, which is only needed at the end.
+        self.vae.to('cpu')
+
         device = self.device
         dtype = self.dtype
         do_classifier_free_guidance = guidance_scale >= 0 and \
@@ -628,12 +638,25 @@ class Hunyuan3DDiTPipeline:
             cond_inputs = self.prepare_image(image)
             image = cond_inputs.pop('image')
         
+        # Optimization: Load conditioner, use it, then immediately offload it.
+        self.conditioner.to(device)
         cond = self.encode_cond(
             image=image,
             additional_cond_inputs=cond_inputs,
             do_classifier_free_guidance=do_classifier_free_guidance,
             dual_guidance=False,
         )
+        self.conditioner.to('cpu')
+        
+        # Micro-Optimization: Offload cond tensor to CPU to save more VRAM before the loop
+        if isinstance(cond, dict):
+            # Recursively move tensors in the cond dictionary to CPU
+            for k in cond:
+                if isinstance(cond[k], torch.Tensor):
+                    cond[k] = cond[k].to('cpu')
+        else:
+            cond = cond.to('cpu')
+
         batch_size = image.shape[0]
 
         t_dtype = torch.long
@@ -652,6 +675,17 @@ class Hunyuan3DDiTPipeline:
             ).to(device=device, dtype=latents.dtype)
         
         with synchronize_timer('Diffusion Sampling'):
+            # Micro-Optimization: Move cond back to GPU right before use
+            if isinstance(cond, dict):
+                for k in cond:
+                    if isinstance(cond[k], torch.Tensor):
+                        cond[k] = cond[k].to(device)
+            else:
+                cond = cond.to(device)
+
+            # Optimization: Move the main model to the GPU for the loop
+            self.model.to(device)
+
             for i, t in enumerate(tqdm(timesteps, disable=not enable_pbar, desc="Diffusion Sampling:", leave=False)):
                 # expand the latents if we are doing classifier free guidance
                 if do_classifier_free_guidance:
@@ -690,14 +724,23 @@ class Hunyuan3DDiTPipeline:
                     step_idx = i // getattr(self.scheduler, "order", 1)
                     callback(step_idx, t, outputs)
 
+            # Optimization: Offload the main model after the loop
+            self.model.to('cpu')
+
         # Ensure model hooks are freed if CPU offloading is used
         self.maybe_free_model_hooks()
 
-        return self._export(
+        # Optimization: Bring VAE back to GPU only when needed for export.
+        self.vae.to(device)
+        outputs = self._export(
             latents,
             output_type,
             box_v, mc_level, num_chunks, octree_resolution, mc_algo,
         )
+        # Optimization: Offload VAE again after use before returning.
+        self.vae.to('cpu')
+        
+        return outputs
 
     def _export(
         self,
@@ -756,7 +799,11 @@ class Hunyuan3DDiTFlowMatchingPipeline(Hunyuan3DDiTPipeline):
         callback = kwargs.pop("callback", None)
         callback_steps = kwargs.pop("callback_steps", None)
 
+        print("2")
         self.set_surface_extractor(mc_algo)
+
+        # Optimization: Offload VAE, which is only needed at the end.
+        self.vae.to('cpu')
 
         device = self.device
         dtype = self.dtype
@@ -768,12 +815,26 @@ class Hunyuan3DDiTFlowMatchingPipeline(Hunyuan3DDiTPipeline):
         # print('image', type(image), 'mask', type(mask))
         cond_inputs = self.prepare_image(image, mask)
         image = cond_inputs.pop('image')
+        
+        # Optimization: Load conditioner, use it, then immediately offload it.
+        self.conditioner.to(device)
         cond = self.encode_cond(
             image=image,
             additional_cond_inputs=cond_inputs,
             do_classifier_free_guidance=do_classifier_free_guidance,
             dual_guidance=False,
         )
+        self.conditioner.to('cpu')
+        
+        # Micro-Optimization: Offload cond tensor to CPU to save more VRAM before the loop
+        if isinstance(cond, dict):
+            # Recursively move tensors in the cond dictionary to CPU
+            for k in cond:
+                if isinstance(cond[k], torch.Tensor):
+                    cond[k] = cond[k].to('cpu')
+        else:
+            cond = cond.to('cpu')
+
 
         batch_size = image.shape[0]
 
@@ -795,6 +856,17 @@ class Hunyuan3DDiTFlowMatchingPipeline(Hunyuan3DDiTPipeline):
             # logger.info(f'Using guidance embed with scale {guidance_scale}')
 
         with synchronize_timer('Diffusion Sampling'):
+            # Micro-Optimization: Move cond back to GPU right before use
+            if isinstance(cond, dict):
+                for k in cond:
+                    if isinstance(cond[k], torch.Tensor):
+                        cond[k] = cond[k].to(device)
+            else:
+                cond = cond.to(device)
+
+            # Optimization: Move the main model to the GPU for the loop
+            self.model.to(device)
+                
             for i, t in enumerate(tqdm(timesteps, disable=not enable_pbar, desc="Diffusion Sampling:")):
                 # expand the latents if we are doing classifier free guidance
                 if do_classifier_free_guidance:
@@ -823,12 +895,21 @@ class Hunyuan3DDiTFlowMatchingPipeline(Hunyuan3DDiTPipeline):
                     step_idx = i // getattr(self.scheduler, "order", 1)
                     callback(step_idx, t, outputs)
 
+            # Optimization: Offload the main model after the loop
+            self.model.to('cpu')
+
         # Ensure model hooks are freed if CPU offloading is used
         self.maybe_free_model_hooks()
 
-        return self._export(
+        # Optimization: Bring VAE back to GPU only when needed for export.
+        self.vae.to(device)
+        outputs = self._export(
             latents,
             output_type,
             box_v, mc_level, num_chunks, octree_resolution, mc_algo,
             enable_pbar=enable_pbar,
         )
+        # Optimization: Offload VAE again after use before returning.
+        self.vae.to('cpu')
+
+        return outputs
