@@ -78,7 +78,17 @@ class Hunyuan3DPaintPipeline:
     def __init__(self, config=None) -> None:
         self.config = config if config is not None else Hunyuan3DPaintConfig()
         self.models = {} # Initialize empty models dict
-        self.is_compiled = False # Add this flag to track compilation status
+        self.is_compiled = False # Default state
+        self.sentinel_path = None # Always initialize the attribute
+
+        # Check for the on-disk cache sentinel file to avoid redundant warm-ups
+        if 'TORCHINDUCTOR_CACHE_DIR' in os.environ:
+            cache_dir = os.environ['TORCHINDUCTOR_CACHE_DIR']
+            self.sentinel_path = os.path.join(cache_dir, "_warmup_complete.sentinel")
+            if os.path.exists(self.sentinel_path):
+                print("[INFO] On-disk compilation cache found. Skipping warm-up.")
+                self.is_compiled = True
+        
         self.stats_logs = {}
         self.render = MeshRender(
             default_resolution=self.config.render_size,
@@ -152,13 +162,12 @@ class Hunyuan3DPaintPipeline:
                 prompt="warmup",
                 custom_view_size=warmup_size,
                 resize_input=True,
-                num_inference_steps=1  # CRITICAL: Run only one step
+                num_inference_steps=1
             )
             # If the warm-up was successful, create the sentinel file (to prevent re-compiles if server restarts)
-            if self.sentinel_path:
-                with open(self.sentinel_path, 'w') as f:
-                    pass  # Create an empty file to mark success
-                print(f"[INFO] Sentinel file created at {self.sentinel_path}")
+            with open(self.sentinel_path, 'w') as f:
+                pass  # Create an empty file to mark success
+            print(f"[INFO] Sentinel file created at {self.sentinel_path}")
 
             print("[INFO] JIT warm-up complete. Main generation will now proceed.")
         except Exception as e:
@@ -248,6 +257,7 @@ class Hunyuan3DPaintPipeline:
         chunk_size = self.config.view_chunk_size
         persistent_cache = {} # Create a cache that will persist across chunks
 
+        # not processing all the views at once
         for i in tqdm(range(0, num_views, chunk_size), desc="Processing views in chunks", position=0, leave=True):
             chunk_end = min(i + chunk_size, num_views)
         
@@ -256,13 +266,12 @@ class Hunyuan3DPaintPipeline:
             chunk_position_maps = position_maps[i:chunk_end]
 
             print(f"Processing chunk {i//chunk_size + 1}/{(num_views + chunk_size - 1)//chunk_size} with {len(chunk_normal_maps)} views...")
-
             
             chunk_multiviews_pbr = self.models["multiview_model"](
                 image_style,
                 chunk_normal_maps + chunk_position_maps,
                 prompt=image_caption,
-                custom_view_size=self.config.resolution,# not processing all the views at once
+                custom_view_size=self.config.resolution,
                 resize_input=True,
                 cache=persistent_cache
             )
