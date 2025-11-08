@@ -9,6 +9,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, './hy3dshape')
 sys.path.insert(0, './hy3dpaint')
 
+# Apply torchvision compatibility fix before other imports
+try:
+    from torchvision_fix import apply_fix
+    apply_fix()
+except ImportError:
+    print("Warning: torchvision_fix module not found, proceeding without compatibility fix.")
+except Exception as e:
+    print(f"Warning: Failed to apply torchvision fix: {e}")
+
 import platform
 import torch
 import multiprocessing as mp

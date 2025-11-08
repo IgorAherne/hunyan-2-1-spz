@@ -167,7 +167,7 @@ class Hunyuan3DPaintPipeline:
             self.config.max_selected_view_num,
         )
 
-        print(f"DEBUG: Requested a maximum of {self.config.max_selected_view_num} views. bake_view_selection returned {len(selected_camera_elevs)} views.")
+        print(f"Requested a maximum of {self.config.max_selected_view_num} views. bake_view_selection returned {len(selected_camera_elevs)} views.")
 
         normal_maps = self.view_processor.render_normal_multiview(
             selected_camera_elevs, selected_camera_azims, use_abs_coor=True

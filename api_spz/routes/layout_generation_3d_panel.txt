@@ -39,5 +39,5 @@ vgroup padl=4 padr=4 spacing=8 flexibleWidth=1
             
             hgroup bg.color=(255,255,255,10) bg.ppu=10 padl=6 flexibleWidth=2 preferredWidth=100
                 space  flexibleHeight=1  flexibleWidth=1
-                slider code_name=(num_view_chunks)  visible_name=(views\nat a time)  min=0  max=8  default=3  show_n_decimals=0  flexibleHeight=1  
+                slider code_name=(num_view_chunks)  visible_name=(views\nat once)  min=0  max=8  default=3  show_n_decimals=0  flexibleHeight=1  
                 space  flexibleHeight=1   flexibleWidth=1  minWidth=10

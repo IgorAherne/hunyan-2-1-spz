@@ -95,7 +95,7 @@ def _blocking_full_generation_task(pil_images: List[Image.Image], arg: Generatio
             temp_obj_path = file_manager.get_temp_path("temp_for_texture.obj")
             mesh.export(str(temp_obj_path))
             
-            conf = Hunyuan3DPaintConfig(max_num_view=6, resolution=768, view_chunk_size=arg.num_view_chunks)
+            conf = Hunyuan3DPaintConfig(max_num_view=8, resolution=768, view_chunk_size=arg.num_view_chunks)
             conf.realesrgan_ckpt_path = "hy3dpaint/ckpt/RealESRGAN_x4plus.pth"
             conf.multiview_cfg_path = "hy3dpaint/cfgs/hunyuan-paint-pbr.yaml"
             conf.custom_pipeline = "hy3dpaint/hunyuanpaintpbr"
@@ -110,7 +110,7 @@ def _blocking_full_generation_task(pil_images: List[Image.Image], arg: Generatio
                     image_path=pil_images[0],
                     output_mesh_path=str(output_textured_obj_path), 
                     save_glb=False,
-                    use_remesh=arg.remesh_for_texture
+                    use_remesh=arg.mesh_simplify<100
                 )
                 mesh = trimesh.load(str(output_textured_obj_path), force="mesh")
             finally:
@@ -156,6 +156,9 @@ async def process_ui_generation_request(data: dict):
         start_time = time.time()
         file_manager.clear_current_generation_folder()
         reset_current_generation()
+
+        operation = data.get("generate_what", "make_mesh") # Default to shape-only generation
+        should_texture = (operation == "make_meshes_and_tex")
 
         images_data = data.pop("single_multi_img_input", [])
         if not images_data:
