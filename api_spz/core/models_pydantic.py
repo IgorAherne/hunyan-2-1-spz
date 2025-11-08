@@ -25,7 +25,9 @@ class GenerationArgForm(BaseModel):
     mesh_simplify: float = 10.0
     apply_texture: bool = False
     texture_size: int = 2048
+    num_view_chunks: int = 3 # for controlling texture generation view chunking
     output_format: str = "glb"
+
 
 
 class GenerationResponse(BaseModel):

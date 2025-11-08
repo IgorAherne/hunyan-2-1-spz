@@ -25,7 +25,7 @@ from hy3dpaint.textureGenPipeline import Hunyuan3DPaintPipeline, Hunyuan3DPaintC
 router = APIRouter()
 logger = logging.getLogger("hunyuan3d_api")
 
-# State Management in the main process
+# --- State Management in the main process ---
 generation_lock = asyncio.Lock()
 current_generation = {
     "status": TaskStatus.FAILED, "progress": 0, "message": "",
@@ -77,18 +77,25 @@ def _blocking_full_generation_task(pil_images: List[Image.Image], arg: Generatio
 
         mesh = state.execute_shape_generation(args_dict)
 
-        # 3. Post-process the mesh
+        # 3. Post-process and apply USER simplification (Reducer) - BEFORE texturing
         update_current_generation(progress=50, message="Post-processing mesh...")
         mesh = state.floater_remover(mesh)
         mesh = state.degenerate_face_remover(mesh)
         
-        # 4. Apply texture if requested
+        simplify_ratio = arg.mesh_simplify / 100.0 if arg.mesh_simplify > 1.0 else arg.mesh_simplify
+        if simplify_ratio < 1.0:
+            update_current_generation(progress=55, message="Simplifying mesh...")
+            target_faces = int(len(mesh.faces) * simplify_ratio)
+            mesh = state.face_reducer(mesh, max_facenum=target_faces)
+        
+        # 4. Apply texture if requested. The texture pipeline will perform its own
+        #    internal simplification (Remesher) for UV unwrapping.
         if arg.apply_texture:
             update_current_generation(progress=60, message="Applying texture...")
             temp_obj_path = file_manager.get_temp_path("temp_for_texture.obj")
             mesh.export(str(temp_obj_path))
             
-            conf = Hunyuan3DPaintConfig(max_num_view=6, resolution=768, view_chunk_size=3)
+            conf = Hunyuan3DPaintConfig(max_num_view=6, resolution=768, view_chunk_size=arg.num_view_chunks)
             conf.realesrgan_ckpt_path = "hy3dpaint/ckpt/RealESRGAN_x4plus.pth"
             conf.multiview_cfg_path = "hy3dpaint/cfgs/hunyuan-paint-pbr.yaml"
             conf.custom_pipeline = "hy3dpaint/hunyuanpaintpbr"
@@ -97,24 +104,21 @@ def _blocking_full_generation_task(pil_images: List[Image.Image], arg: Generatio
             
             output_textured_obj_path = file_manager.get_temp_path("textured_mesh.obj")
             try:
+                # The `use_remesh` parameter controls the internal remesher.
                 texture_pipeline(
-                    mesh_path=str(temp_obj_path), image_path=pil_images[0],
-                    output_mesh_path=str(output_textured_obj_path), save_glb=False
+                    mesh_path=str(temp_obj_path), 
+                    image_path=pil_images[0],
+                    output_mesh_path=str(output_textured_obj_path), 
+                    save_glb=False,
+                    use_remesh=arg.remesh_for_texture
                 )
                 mesh = trimesh.load(str(output_textured_obj_path), force="mesh")
             finally:
                 texture_pipeline.free_memory()
-            update_current_generation(progress=85, message="Texture applied.")
+            update_current_generation(progress=95, message="Texture applied.")
 
-        # 5. Simplify mesh if requested
-        simplify_ratio = arg.mesh_simplify / 100.0 if arg.mesh_simplify > 1.0 else arg.mesh_simplify
-        if simplify_ratio < 1.0:
-            update_current_generation(progress=90, message="Simplifying mesh...")
-            target_faces = int(len(mesh.faces) * simplify_ratio)
-            mesh = state.face_reducer(mesh, max_facenum=target_faces)
-        
-        # 6. Export final model
-        update_current_generation(progress=95, message="Exporting final model...")
+        # 5. Export final model. NO simplification happens after this point.
+        update_current_generation(progress=98, message="Exporting final model...")
         model_path = file_manager.get_temp_path(f"model.{arg.output_format}")
         mesh.export(str(model_path))
 
