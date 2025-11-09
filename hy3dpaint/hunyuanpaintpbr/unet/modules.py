@@ -16,7 +16,6 @@
 
 import os
 import json
-import time
 import copy
 import gc
 import numpy as np
@@ -939,17 +938,31 @@ class UNet2p5DConditionModel(torch.nn.Module):
         mid_block_res_sample=None,
         **cached_condition,
     ):
-        timers = {
-            "Input Prep": 0,
-            "Position Encoding": 0,
-            "DINO Features": 0,
-            "Reference UNet Pass": 0,
-            "Main Denoising UNet Pass": 0,
-        }
-        total_start = time.time()
 
-        # --- Timer for Input Prep ---
-        prep_start = time.time()
+        """Forward pass with multiview/material conditioning.
+        
+        Key stages:
+        1. Input preparation (concat normal/position maps)
+        2. Reference feature extraction (dual-stream)
+        3. Position encoding (voxel indices)
+        4. DINO feature projection
+        5. Main UNet processing with attention conditioning
+        
+        Args:
+            sample: Input latents [B, N_pbr, N_gen, C, H, W]
+            cached_condition: Dictionary containing:
+                - embeds_normal: Normal map embeddings
+                - embeds_position: Position map embeddings
+                - ref_latents: Reference image latents
+                - dino_hidden_states: DINO features
+                - position_maps: 3D position maps
+                - mva_scale: Multiview attention scale
+                - ref_scale: Reference attention scale
+                
+        Returns:
+            torch.Tensor: Output features
+        """
+
         B, N_pbr, N_gen, _, H, W = sample.shape
         assert H == W
 
@@ -976,10 +989,7 @@ class UNet2p5DConditionModel(torch.nn.Module):
             added_cond_kwargs_gen = {"text_embeds": text_embeds_gen, "time_ids": time_ids_gen}
         else:
             added_cond_kwargs_gen = None
-        timers["Input Prep"] += time.time() - prep_start
 
-        # --- Timer for Position Encoding ---
-        pos_start = time.time()
         if self.use_position_rope:
             if "position_voxel_indices" in cached_condition["cache"]:
                 position_voxel_indices = cached_condition["cache"]["position_voxel_indices"]
@@ -998,10 +1008,7 @@ class UNet2p5DConditionModel(torch.nn.Module):
                             torch.cuda.empty_cache()
         else:
             position_voxel_indices = None
-        timers["Position Encoding"] += time.time() - pos_start
-        
-        # --- Timer for DINO Features ---
-        dino_start = time.time()
+
         if self.use_dino:
             if "dino_hidden_states_proj" in cached_condition["cache"]:
                 dino_hidden_states = cached_condition["cache"]["dino_hidden_states_proj"]
@@ -1017,10 +1024,8 @@ class UNet2p5DConditionModel(torch.nn.Module):
                         torch.cuda.empty_cache()
         else:
             dino_hidden_states = None
-        timers["DINO Features"] += time.time() - dino_start
 
-        # --- Timer for Reference UNet Pass ---
-        ref_start = time.time()
+
         if self.use_ra:
             if "condition_embed_dict" in cached_condition["cache"]:
                 condition_embed_dict = cached_condition["cache"]["condition_embed_dict"]
@@ -1102,14 +1107,11 @@ class UNet2p5DConditionModel(torch.nn.Module):
                     torch.cuda.empty_cache()
         else:
             condition_embed_dict = None
-        timers["Reference UNet Pass"] += time.time() - ref_start
 
         mva_scale = cached_condition.get("mva_scale", 1.0)
         ref_scale = cached_condition.get("ref_scale", 1.0)
 
-        # --- Timer for Main Denoising UNet Pass ---
-        main_unet_start = time.time()
-        result = self.unet(
+        return self.unet(
             sample,
             timestep,
             encoder_hidden_states_gen,
@@ -1140,15 +1142,3 @@ class UNet2p5DConditionModel(torch.nn.Module):
                 "position_voxel_indices": position_voxel_indices,
             },
         )
-        timers["Main Denoising UNet Pass"] += time.time() - main_unet_start
-
-        total_duration = time.time() - total_start
-        print(f"\n--- [UNET FORWARD PROFILING] Step Total: {total_duration:.3f}s ---")
-        for name, duration in timers.items():
-            if total_duration > 0:
-                percentage = (duration / total_duration) * 100
-                print(f"  - {name}: {duration:.3f}s ({percentage:.1f}%)")
-            else:
-                print(f"  - {name}: {duration:.3f}s")
-
-        return result
