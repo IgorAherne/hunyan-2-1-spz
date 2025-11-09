@@ -70,7 +70,7 @@ class multiviewDiffusionNet:
             unet=unet,
             scheduler=scheduler,
             feature_extractor=feature_extractor,
-            use_torch_compile=True, 
+            use_torch_compile=False, # We will compile manually
         )
 
         pipeline.scheduler = UniPCMultistepScheduler.from_config(pipeline.scheduler.config, timestep_spacing="trailing")
@@ -87,7 +87,7 @@ class multiviewDiffusionNet:
         if dual_unet is not None:
             dual_unet.enable_gradient_checkpointing()
 
-        # 2. Manually enable Forward Chunking for both
+        # 3. Manually enable Forward Chunking for both
         for unet_model in [main_unet, dual_unet]:
             if unet_model is None:
                 continue

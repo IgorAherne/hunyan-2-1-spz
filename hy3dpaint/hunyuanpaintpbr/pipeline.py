@@ -19,6 +19,7 @@ from diffusers.models import AutoencoderKL, UNet2DConditionModel
 from diffusers.schedulers import KarrasDiffusionSchedulers
 
 import gc
+import time
 import numpy
 import torch
 import torch.utils.checkpoint
@@ -517,6 +518,7 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
         
         """
 
+        setup_start_time = time.time()
         callback = kwargs.pop("callback", None)
         callback_steps = kwargs.pop("callback_steps", None)
 
@@ -645,7 +647,15 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                 guidance_scale_tensor, embedding_dim=self.unet.config.time_cond_proj_dim
             ).to(device=device, dtype=latents.dtype)
 
+        print(f"[PROFILING] Pre-Loop Setup took: {time.time() - setup_start_time:.2f}s")
         # 7. Denoising loop
+        timers = {
+            "data_prep": 0,
+            "unet_forward": 0,
+            "guidance": 0,
+            "scheduler_step": 0,
+        }
+        loop_start_time = time.time()
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         self._num_timesteps = len(timesteps)
         with self.progress_bar(total=num_inference_steps) as progress_bar:
@@ -654,6 +664,7 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                     continue
 
                 # expand the latents if we are doing classifier free guidance
+                prep_start = time.time()
                 latents = rearrange(
                     latents, "(b n_pbr n) c h w -> b n_pbr n c h w", n=kwargs["num_in_batch"], n_pbr=n_pbr
                 )
@@ -665,9 +676,10 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                 latent_model_input = rearrange(
                     latent_model_input, "(b n_pbr n) c h w ->b n_pbr n c h w", n=kwargs["num_in_batch"], n_pbr=n_pbr
                 )
+                timers["data_prep"] += time.time() - prep_start
 
                 # predict the noise residual
-
+                unet_start = time.time()
                 noise_pred = self.unet(
                     latent_model_input,
                     t,
@@ -678,6 +690,9 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                     return_dict=False,
                     **kwargs,
                 )[0]
+                timers["unet_forward"] += time.time() - unet_start
+                
+                guidance_start = time.time()
                 latents = rearrange(latents, "b n_pbr n c h w -> (b n_pbr n) c h w")
 
                 # perform guidance
@@ -714,11 +729,14 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                 if self.do_classifier_free_guidance and self.guidance_rescale > 0.0:
                     # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
                     noise_pred = rescale_noise_cfg(noise_pred, noise_pred_ref, guidance_rescale=self.guidance_rescale)
+                timers["guidance"] += time.time() - guidance_start
 
                 # compute the previous noisy sample x_t -> x_t-1
+                scheduler_start = time.time()
                 latents = self.scheduler.step(
                     noise_pred, t, latents[:, :num_channels_latents, :, :], **extra_step_kwargs, return_dict=False
                 )[0]
+                timers["scheduler_step"] += time.time() - scheduler_start
 
                 if callback_on_step_end is not None:
                     callback_kwargs = {}
@@ -737,15 +755,26 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                     if callback is not None and i % callback_steps == 0:
                         step_idx = i // getattr(self.scheduler, "order", 1)
                         callback(step_idx, t, latents)
+        
+        loop_duration = time.time() - loop_start_time
+        print(f"\n[PROFILING - DENOISE LOOP] Total loop time: {loop_duration:.2f}s")
+        for name, duration in timers.items():
+            if loop_duration > 0:
+                percentage = (duration / loop_duration) * 100
+                print(f"[PROFILING - DENOISE LOOP] - {name}: {duration:.2f}s ({percentage:.1f}%)")
+            else:
+                print(f"[PROFILING - DENOISE LOOP] - {name}: {duration:.2f}s")
 
         if not output_type == "latent":
             # Chunk the VAE decoding process to reduce peak memory
+            vae_start_time = time.time()
             latents = latents / self.vae.config.scaling_factor
             decoded_images = []
             for latent_slice in latents.split(2):
                 decoded_slice = self.vae.decode(latent_slice, return_dict=False, generator=generator)[0]
                 decoded_images.append(decoded_slice)
             image = torch.cat(decoded_images, dim=0)
+            print(f"[PROFILING] VAE Decode took: {time.time() - vae_start_time:.2f}s")
             
             image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
         else:
