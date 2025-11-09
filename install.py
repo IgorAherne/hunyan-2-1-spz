@@ -184,8 +184,6 @@ def install_dependencies():
         packages = [
             (f"pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128", "Installing PyTorch 2.8 with CUDA 12.8"),
             ("pip install -r requirements.txt", "Installing dependencies from requirements.txt"),
-            ("pip install -U xformers --index-url https://download.pytorch.org/whl/cu128", "Installing XFormers"),
-            ('pip install -U "triton-windows<3.5"', "Installing Triton-Windows"),
             # Ensuring key packages needed for Gradio/API are installed/updated
             (f"pip install huggingface_hub accelerate gradio", "Installing HuggingFace Hub, Accelerate, and Gradio"),
         ]
