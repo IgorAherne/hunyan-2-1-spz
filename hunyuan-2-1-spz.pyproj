@@ -29,6 +29,12 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
+    <Folder Include="api_spz\" />
+    <Folder Include="api_spz\core\" />
+    <Folder Include="api_spz\core\__pycache__\" />
+    <Folder Include="api_spz\routes\" />
+    <Folder Include="api_spz\routes\__pycache__\" />
+    <Folder Include="api_spz\__pycache__\" />
     <Folder Include="hy3dpaint\" />
     <Folder Include="hy3dpaint\assets\" />
     <Folder Include="hy3dpaint\assets\case_1\" />
@@ -131,6 +137,12 @@
     <Folder Include="hy3dshape\tools\watertight\" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="api_spz\core\__pycache__\files_manage.cpython-311.pyc" />
+    <Content Include="api_spz\core\__pycache__\models_pydantic.cpython-311.pyc" />
+    <Content Include="api_spz\core\__pycache__\state_manage.cpython-311.pyc" />
+    <Content Include="api_spz\routes\layout_generation_3d_panel.txt" />
+    <Content Include="api_spz\routes\__pycache__\generation.cpython-311.pyc" />
+    <Content Include="api_spz\__pycache__\__init__.cpython-311.pyc" />
     <Content Include="hy3dpaint\assets\case_1\image.png" />
     <Content Include="hy3dpaint\assets\case_1\mesh.glb" />
     <Content Include="hy3dpaint\assets\case_2\image.png" />
@@ -576,6 +588,13 @@
   <ItemGroup>
     <Compile Include="api_models.py" />
     <Compile Include="api_server.py" />
+    <Compile Include="api_spz\core\exceptions.py" />
+    <Compile Include="api_spz\core\files_manage.py" />
+    <Compile Include="api_spz\core\models_pydantic.py" />
+    <Compile Include="api_spz\core\state_manage.py" />
+    <Compile Include="api_spz\main_api.py" />
+    <Compile Include="api_spz\routes\generation.py" />
+    <Compile Include="api_spz\__init__.py" />
     <Compile Include="constants.py" />
     <Compile Include="demo.py" />
     <Compile Include="gradio_app.py" />

@@ -22,13 +22,6 @@ from einops import rearrange
 from diffusers.utils import deprecate
 from diffusers.models.attention_processor import Attention, AttnProcessor
 
-try:
-    import xformers
-    import xformers.ops
-    XFORMERS_AVAILABLE = True
-except ImportError:
-    XFORMERS_AVAILABLE = False
-
 
 class AttnUtils:
     """
@@ -490,7 +483,6 @@ class AttnCore:
         temb: Optional[torch.Tensor] = None,
         get_qkv_fn: Callable = None,
         apply_rope_fn: Optional[Callable] = None,
-        use_xformers: bool = True, 
         **kwargs,
     ):
         """
@@ -552,16 +544,9 @@ class AttnCore:
             query, key = apply_rope_fn(query, key, head_dim, **kwargs)
 
         # Compute attention
-        if XFORMERS_AVAILABLE and use_xformers:
-            # Use xformers for memory-efficient attention (best for self-attention)
-            hidden_states = xformers.ops.memory_efficient_attention(
-                query, key, value, attn_bias=attention_mask, scale=attn.scale
-            )
-        else:
-            # Fallback to PyTorch's native sdp attention (necessary for cross-attention)
-            hidden_states = F.scaled_dot_product_attention(
-                query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
-            )
+        hidden_states = F.scaled_dot_product_attention(
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+        )
 
         return hidden_states, residual, input_ndim, shape_info, batch_size, attn.heads, head_dim
 
@@ -836,7 +821,7 @@ class RefAttnProcessor2_0(BaseAttnProcessor):
 
         # Core processing
         hidden_states, residual, input_ndim, shape_info, batch_size, heads, head_dim = AttnCore.process_attention_base(
-            attn, hidden_states, encoder_hidden_states, attention_mask, temb, get_qkv_fn=get_qkv, use_xformers=False
+            attn, hidden_states, encoder_hidden_states, attention_mask, temb, get_qkv_fn=get_qkv
         )
 
         # Split and process each PBR setting output
