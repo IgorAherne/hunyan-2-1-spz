@@ -23,12 +23,6 @@ sys.path.insert(0, './hy3dpaint')
 # Set the torch.compile cache directory *before* importing torch, 
 # using the modern Inductor environment variables.
 import os
-cache_dir = os.path.join(os.getcwd(), "temp", "torch_compile_cache")
-os.makedirs(cache_dir, exist_ok=True)
-os.environ['TORCHINDUCTOR_FX_GRAPH_CACHE'] = '1'
-os.environ['TORCHINDUCTOR_CACHE_DIR'] = cache_dir
-print(f"[INFO] Persistent torch.compile disk cache enabled at: {os.path.abspath(cache_dir)}")
-
 
 try:
     from torchvision_fix import apply_fix
