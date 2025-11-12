@@ -63,6 +63,10 @@ class multiviewDiffusionNet:
         feature_extractor = CLIPImageProcessor.from_pretrained(model_path, subfolder="feature_extractor")
         scheduler = EulerAncestralDiscreteScheduler.from_pretrained(model_path, subfolder="scheduler")
 
+        # Set the memory format for the models that perform heavy convolution operations.
+        vae = vae.to(memory_format=torch.channels_last)
+        unet = unet.to(memory_format=torch.channels_last)
+
         pipeline = HunyuanPaintPipeline(
             vae=vae,
             text_encoder=text_encoder,
@@ -187,9 +191,9 @@ class multiviewDiffusionNet:
 
         infer_steps_dict = {
             "EulerAncestralDiscreteScheduler": 30,
-            "UniPCMultistepScheduler": 2,
+            "UniPCMultistepScheduler": 15,
             "DDIMScheduler": 50,
-            "ShiftSNRScheduler": 2,
+            "ShiftSNRScheduler": 15,
         }
         # Use the passed num_inference_steps only if it's provided (for the warm-up).
         # Otherwise, fall back to the scheduler-specific dictionary for the main run.

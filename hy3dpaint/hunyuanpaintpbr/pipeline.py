@@ -627,6 +627,8 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
             generator,
             latents,
         )
+        # Ensure latents are in channels_last format to match the UNet.
+        latents = latents.to(memory_format=torch.channels_last)
 
         # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
