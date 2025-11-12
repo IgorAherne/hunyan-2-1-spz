@@ -604,6 +604,12 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
                 attention_mask=None,
                 **cross_attention_kwargs,
             )  # b (n l) c
+            
+            # Explicitly delete the large tensor and suggest a cache clear to reduce the VRAM hump
+            del condition_embed
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
             attn_output = rearrange(attn_output, "b n_pbr (n l) c -> (b n_pbr n) l c", n=num_in_batch, n_pbr=N_pbr)
 
             ref_scale_timing = ref_scale
@@ -1025,7 +1031,6 @@ class UNet2p5DConditionModel(torch.nn.Module):
         else:
             dino_hidden_states = None
 
-
         if self.use_ra:
             if "condition_embed_dict" in cached_condition["cache"]:
                 condition_embed_dict = cached_condition["cache"]["condition_embed_dict"]
@@ -1111,7 +1116,7 @@ class UNet2p5DConditionModel(torch.nn.Module):
         mva_scale = cached_condition.get("mva_scale", 1.0)
         ref_scale = cached_condition.get("ref_scale", 1.0)
 
-        return self.unet(
+        result = self.unet(
             sample,
             timestep,
             encoder_hidden_states_gen,
@@ -1142,3 +1147,4 @@ class UNet2p5DConditionModel(torch.nn.Module):
                 "position_voxel_indices": position_voxel_indices,
             },
         )
+        return result

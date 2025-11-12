@@ -516,7 +516,6 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
         6. Cleanup: Releases resources and formats output
         
         """
-
         callback = kwargs.pop("callback", None)
         callback_steps = kwargs.pop("callback_steps", None)
 
