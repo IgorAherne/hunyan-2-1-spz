@@ -79,16 +79,6 @@ class Hunyuan3DPaintPipeline:
     def __init__(self, config=None) -> None:
         self.config = config if config is not None else Hunyuan3DPaintConfig()
         self.models = {} # Initialize empty models dict
-        self.is_compiled = False # Default state
-        self.sentinel_path = None # Always initialize the attribute
-
-        # Check for the on-disk cache sentinel file to avoid redundant warm-ups
-        if 'TORCHINDUCTOR_CACHE_DIR' in os.environ:
-            cache_dir = os.environ['TORCHINDUCTOR_CACHE_DIR']
-            self.sentinel_path = os.path.join(cache_dir, "_warmup_complete.sentinel")
-            if os.path.exists(self.sentinel_path):
-                print("[INFO] On-disk compilation cache found. Skipping warm-up.")
-                self.is_compiled = True
         
         self.stats_logs = {}
         self.render = MeshRender(
@@ -107,10 +97,7 @@ class Hunyuan3DPaintPipeline:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             if model_name == "super_model":
-                super_model_net = imageSuperNet(self.config)
-                # Apply torch.compile to the underlying RRDBNet model within the RealESRGANer
-                super_model_net.upsampler.model = torch.compile(super_model_net.upsampler.model)
-                self.models[model_name] = super_model_net
+                self.models[model_name] = imageSuperNet(self.config)
             elif model_name == "multiview_model":
                 # Load multiview model (handles Bfloat16 and CPU offloading internally)
                 self.models[model_name] = multiviewDiffusionNet(self.config)
