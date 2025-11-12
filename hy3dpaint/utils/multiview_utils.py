@@ -187,9 +187,9 @@ class multiviewDiffusionNet:
 
         infer_steps_dict = {
             "EulerAncestralDiscreteScheduler": 30,
-            "UniPCMultistepScheduler": 15,
+            "UniPCMultistepScheduler": 2,
             "DDIMScheduler": 50,
-            "ShiftSNRScheduler": 15,
+            "ShiftSNRScheduler": 2,
         }
         # Use the passed num_inference_steps only if it's provided (for the warm-up).
         # Otherwise, fall back to the scheduler-specific dictionary for the main run.

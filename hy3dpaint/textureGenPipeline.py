@@ -122,6 +122,8 @@ class Hunyuan3DPaintPipeline:
         """Frees up all memory."""
         self.offload_model("super_model")
         self.offload_model("multiview_model")
+        if hasattr(self, 'render'):
+            self.render.to("cpu")
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -239,8 +241,22 @@ class Hunyuan3DPaintPipeline:
 
         multiviews_pbr = all_multiviews_pbr
         
+        # Explicitly delete large intermediate tensors that are no longer needed
+        # before offloading the model to maximize freed VRAM.
+        del normal_maps, position_maps, persistent_cache, all_multiviews_pbr
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
         # Offload multiview model
         self.offload_model("multiview_model")
+
+        # Offload the mesh renderer to CPU to free VRAM for super-resolution.
+        print("Offloading mesh renderer to CPU...")
+        self.render.to("cpu")
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         ###########  Enhance  ##########
         enhance_images = {}
@@ -260,6 +276,10 @@ class Hunyuan3DPaintPipeline:
         
         # Offload super-resolution model
         self.offload_model("super_model")
+
+        # Move the mesh renderer back to GPU for the baking step.
+        print("Moving mesh renderer back to GPU...")
+        self.render.to(self.config.device)
 
         ###########  Bake  ##########
         time_marker = time.time()
