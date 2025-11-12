@@ -166,8 +166,9 @@ class multiviewDiffusionNet:
         if hasattr(self.pipeline.unet, "use_dino") and self.pipeline.unet.use_dino:
             # Check cache first for DINO features
             if cache is not None and "dino_hidden_states" in cache:
-                dino_hidden_states = cache["dino_hidden_states"].to(self.pipeline._execution_device)
                 print("Reusing cached DINO hidden states.")
+                dino_hidden_states = cache["dino_hidden_states"].to(self.pipeline._execution_device)
+                self.dino_v2.to("cpu") # Make sure dino remains on CPU
             else:
                 # If not in cache, compute and store them
                 dino_device = self.pipeline._execution_device
