@@ -22,6 +22,14 @@ from einops import rearrange
 from diffusers.utils import deprecate
 from diffusers.models.attention_processor import Attention, AttnProcessor
 
+try:
+    import flash_attn
+    FLASH_ATTENTION_AVAILABLE = True
+    print("FlashAttention is available.")
+except ImportError:
+    FLASH_ATTENTION_AVAILABLE = False
+    print("FlashAttention is not available.")
+
 
 class AttnUtils:
     """
@@ -483,6 +491,7 @@ class AttnCore:
         temb: Optional[torch.Tensor] = None,
         get_qkv_fn: Callable = None,
         apply_rope_fn: Optional[Callable] = None,
+        disable_flash_attention: bool = False,
         **kwargs,
     ):
         """
@@ -543,10 +552,33 @@ class AttnCore:
         if apply_rope_fn is not None:
             query, key = apply_rope_fn(query, key, head_dim, **kwargs)
 
-        # Compute attention
-        hidden_states = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+        # Check if FlashAttention can be used
+        # It requires float16/bfloat16 and no attention mask.
+        use_flash_attention = (
+            not disable_flash_attention
+            and FLASH_ATTENTION_AVAILABLE
+            and query.dtype in [torch.float16, torch.bfloat16]
+            and attention_mask is None
         )
+
+        if use_flash_attention:
+            # FlashAttention requires the shape (batch_size, seq_len, num_heads, head_dim)
+            # We need to transpose from (batch_size, num_heads, seq_len, head_dim)
+            query = query.transpose(1, 2)
+            key = key.transpose(1, 2)
+            value = value.transpose(1, 2)
+
+            hidden_states = flash_attn.flash_attn_func(
+                query, key, value, dropout_p=0.0, causal=False
+            )
+
+            # Transpose back to the expected shape (batch_size, num_heads, seq_len, head_dim)
+            hidden_states = hidden_states.transpose(1, 2)
+        else:
+            # Compute attention
+            hidden_states = F.scaled_dot_product_attention(
+                query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+            )
 
         return hidden_states, residual, input_ndim, shape_info, batch_size, attn.heads, head_dim
 
@@ -821,7 +853,13 @@ class RefAttnProcessor2_0(BaseAttnProcessor):
 
         # Core processing
         hidden_states, residual, input_ndim, shape_info, batch_size, heads, head_dim = AttnCore.process_attention_base(
-            attn, hidden_states, encoder_hidden_states, attention_mask, temb, get_qkv_fn=get_qkv
+            attn,
+            hidden_states,
+            encoder_hidden_states,
+            attention_mask,
+            temb,
+            get_qkv_fn=get_qkv,
+            disable_flash_attention=True,
         )
 
         # Split and process each PBR setting output
